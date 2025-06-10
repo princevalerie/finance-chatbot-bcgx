@@ -1,3 +1,4 @@
+import asyncio
 import streamlit as st
 import os
 from typing import List, Dict, Any
@@ -11,7 +12,6 @@ import time
 # PDF conversion imports
 # import pdfkit # Dihapus
 import io
-import asyncio
 from weasyprint import HTML # Menambahkan import weasyprint
 
 # LangChain imports
@@ -107,8 +107,22 @@ class SECDocumentProcessor:
     def convert_url_to_pdf(self, url: str) -> str:
         """Convert SEC document URL to PDF and save to a temporary file using WeasyPrint"""
         try:
-            # Menggunakan WeasyPrint untuk mengkonversi URL ke PDF
-            htmldoc = HTML(url=url)
+            # Tambahkan headers yang sesuai untuk SEC.gov
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Cache-Control': 'max-age=0'
+            }
+            
+            # Download HTML content terlebih dahulu
+            response = requests.get(url, headers=headers)
+            response.raise_for_status()  # Raise exception untuk status code error
+            
+            # Gunakan HTML content untuk WeasyPrint
+            htmldoc = HTML(string=response.text)
             
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf_file:
                 htmldoc.write_pdf(tmp_pdf_file.name)
@@ -116,8 +130,15 @@ class SECDocumentProcessor:
             
             st.success(f"Document converted and saved to {pdf_path}")
             return pdf_path
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 403:
+                st.error("Access denied by SEC.gov. Please try again later or use a different URL.")
+            else:
+                st.error(f"HTTP Error: {str(e)}")
+            raise
         except Exception as e:
-            raise Exception(f"Failed to convert URL to PDF: {str(e)}")
+            st.error(f"Failed to convert URL to PDF: {str(e)}")
+            raise
 
     def initialize_embeddings(self):
         """Initialize Qwen embeddings from Hugging Face"""
