@@ -1,0 +1,44 @@
+# Web Framework
+streamlit
+
+# LangChain dan Komponennya
+langchain
+langchain-core
+langchain-community
+langchain-google-genai
+
+# Vector Store dan Embeddings
+faiss-cpu
+sentence-transformers
+huggingface-hub
+
+# Google AI
+google-generativeai
+
+# PDF Processing
+weasyprint
+unstructured
+pypdf
+pdfplumber
+
+# Machine Learning & Data Processing
+torch
+transformers
+numpy
+pandas
+
+# Utilitas
+python-dotenv
+requests
+tiktoken
+accelerate
+safetensors
+protobuf
+typing-extensions
+pydantic
+nest-asyncio
+openai
+google
+contourpy
+cycler
+arabic-reshaper
