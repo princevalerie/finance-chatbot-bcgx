@@ -21,6 +21,8 @@ unstructured[pdf]>=0.10.30
 unstructured-inference>=0.7.23
 pypdf
 pdfplumber
+opencv-python-headless
+
 pi-heif
 
 # Machine Learning & Data Processing
