@@ -1,6 +1,13 @@
-import asyncio
-import streamlit as st
 import os
+# Nonaktifkan file watcher Streamlit untuk menghindari konflik dengan PyTorch
+os.environ["STREAMLIT_SERVER_ENABLE_FILE_WATCHER"] = "false"
+
+import streamlit as st
+import torch
+# Patch PyTorch path handling
+torch.classes.__path__ = []
+
+import asyncio
 from typing import List, Dict, Any
 import tempfile
 from pathlib import Path
