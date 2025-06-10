@@ -20,6 +20,7 @@ weasyprint
 unstructured
 pypdf
 pdfplumber
+pi-heif
 
 # Machine Learning & Data Processing
 torch
@@ -42,3 +43,4 @@ google
 contourpy
 cycler
 arabic-reshaper
+asyncio
