@@ -17,7 +17,8 @@ google-generativeai
 
 # PDF Processing
 weasyprint
-unstructured
+unstructured[pdf]
+unstructured-inference
 pypdf
 pdfplumber
 pi-heif
