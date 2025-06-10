@@ -11,6 +11,7 @@ import time
 # PDF conversion imports
 # import pdfkit # Dihapus
 import io
+import asyncio
 from weasyprint import HTML # Menambahkan import weasyprint
 
 # LangChain imports
