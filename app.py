@@ -107,19 +107,34 @@ class SECDocumentProcessor:
     def convert_url_to_pdf(self, url: str) -> str:
         """Convert SEC document URL to PDF and save to a temporary file using WeasyPrint"""
         try:
-            # Tambahkan headers yang sesuai untuk SEC.gov
+            # Tambahkan headers yang lebih lengkap untuk SEC.gov
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
                 'Connection': 'keep-alive',
                 'Upgrade-Insecure-Requests': '1',
-                'Cache-Control': 'max-age=0'
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-User': '?1',
+                'Cache-Control': 'max-age=0',
+                'Referer': 'https://www.sec.gov/'
             }
             
-            # Download HTML content terlebih dahulu
-            response = requests.get(url, headers=headers)
-            response.raise_for_status()  # Raise exception untuk status code error
+            # Buat session untuk menjaga cookies
+            session = requests.Session()
+            
+            # Tambahkan delay untuk menghindari rate limiting
+            time.sleep(2)
+            
+            # Coba download dengan session
+            response = session.get(url, headers=headers, timeout=30)
+            response.raise_for_status()
+            
+            # Tambahkan delay lagi sebelum konversi
+            time.sleep(1)
             
             # Gunakan HTML content untuk WeasyPrint
             htmldoc = HTML(string=response.text)
@@ -130,11 +145,18 @@ class SECDocumentProcessor:
             
             st.success(f"Document converted and saved to {pdf_path}")
             return pdf_path
+            
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 403:
-                st.error("Access denied by SEC.gov. Please try again later or use a different URL.")
+                st.error("Access denied by SEC.gov. Possible solutions:\n"
+                        "1. Try again in a few minutes\n"
+                        "2. Use a different URL\n"
+                        "3. Check if the document is publicly accessible")
             else:
                 st.error(f"HTTP Error: {str(e)}")
+            raise
+        except requests.exceptions.Timeout:
+            st.error("Request timed out. Please try again.")
             raise
         except Exception as e:
             st.error(f"Failed to convert URL to PDF: {str(e)}")
