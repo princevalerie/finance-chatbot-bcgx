@@ -40,7 +40,3 @@ typing-extensions
 torch # For sentence-transformers
 transformers
 
-# Development/Testing (optional)
-pytest>=7.4.0
-black>=23.3.0
-flake8>=6.0.0
