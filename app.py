@@ -26,55 +26,249 @@ import google.generativeai as genai
 
 # Configure page
 st.set_page_config(
-    page_title="Financial RAG Analyst",
-    page_icon="📊",
+    page_title="Chat with your database",
+    page_icon="💬",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
-# Custom CSS
+# Modern Chat UI CSS
 st.markdown("""
 <style>
-    .main-header {
-        font-size: 2.5rem;
-        font-weight: bold;
-        color: #1f77b4;
+    /* Hide Streamlit default elements */
+    #root > div:nth-child(1) > div > div > div > div > section > div {padding-top: 1rem;}
+    .stApp > header {display: none;}
+    .stDeployButton {display: none;}
+    #MainMenu {display: none;}
+    footer {display: none;}
+    
+    /* Main container */
+    .main-container {
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 2rem 1rem;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    
+    /* Chat title */
+    .chat-title {
         text-align: center;
+        color: white;
+        font-size: 2.5rem;
+        font-weight: 600;
+        margin-bottom: 3rem;
+        text-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    /* Chat container */
+    .chat-container {
+        background: white;
+        border-radius: 20px;
+        padding: 2rem;
+        box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+        max-height: 70vh;
+        overflow-y: auto;
         margin-bottom: 2rem;
     }
-    .metric-card {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0;
+    
+    /* Message bubbles */
+    .message-bubble {
+        display: flex;
+        align-items: flex-start;
+        margin: 1.5rem 0;
+        gap: 0.75rem;
     }
-    .chat-message {
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0;
+    
+    .message-avatar {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 14px;
+        font-weight: 600;
+        flex-shrink: 0;
+        margin-top: 4px;
     }
+    
+    .user-avatar {
+        background: linear-gradient(135deg, #ff6b6b, #ee5a5a);
+        color: white;
+    }
+    
+    .assistant-avatar {
+        background: linear-gradient(135deg, #4ecdc4, #44a08d);
+        color: white;
+    }
+    
+    .message-content {
+        background: #f8f9fa;
+        padding: 1rem 1.25rem;
+        border-radius: 18px;
+        max-width: 75%;
+        line-height: 1.5;
+        color: #2c3e50;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    }
+    
+    .user-message .message-content {
+        background: linear-gradient(135deg, #ff6b6b, #ee5a5a);
+        color: white;
+        margin-left: auto;
+    }
+    
+    .assistant-message .message-content {
+        background: linear-gradient(135deg, #4ecdc4, #44a08d);
+        color: white;
+    }
+    
     .user-message {
-        background-color: #e3f2fd;
-        border-left: 4px solid #2196f3;
+        flex-direction: row-reverse;
     }
-    .assistant-message {
-        background-color: #f3e5f5;
-        border-left: 4px solid #9c27b0;
+    
+    /* Input area */
+    .input-container {
+        background: white;
+        border-radius: 50px;
+        padding: 0.75rem 1.5rem;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        display: flex;
+        align-items: center;
+        gap: 1rem;
     }
-    .document-preview {
-        max-height: 400px;
-        overflow-y: auto;
-        border: 1px solid #ddd;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        background-color: #fafafa;
+    
+    .stTextInput > div > div > input {
+        border: none !important;
+        outline: none !important;
+        background: transparent !important;
+        font-size: 16px !important;
+        padding: 0.5rem 0 !important;
     }
+    
+    .stTextInput > div > div {
+        border: none !important;
+        background: transparent !important;
+    }
+    
+    .stTextInput {
+        flex: 1;
+    }
+    
+    /* Send button */
+    .send-button {
+        background: linear-gradient(135deg, #667eea, #764ba2);
+        color: white;
+        border: none;
+        border-radius: 50%;
+        width: 40px;
+        height: 40px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        font-size: 18px;
+        transition: all 0.3s ease;
+    }
+    
+    .send-button:hover {
+        transform: scale(1.05);
+        box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+    }
+    
+    /* Sample questions */
+    .sample-questions {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        margin-bottom: 2rem;
+    }
+    
+    .sample-question {
+        background: rgba(255,255,255,0.95);
+        border-radius: 15px;
+        padding: 1rem 1.25rem;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        border: 2px solid transparent;
+    }
+    
+    .sample-question:hover {
+        background: white;
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+        border-color: rgba(102, 126, 234, 0.3);
+    }
+    
+    .sample-question-text {
+        color: #2c3e50;
+        font-weight: 500;
+        margin: 0;
+    }
+    
+    /* Upload area */
+    .upload-area {
+        background: rgba(255,255,255,0.95);
+        border-radius: 15px;
+        padding: 2rem;
+        text-align: center;
+        margin-bottom: 2rem;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    
+    .upload-text {
+        color: #2c3e50;
+        font-size: 1.1rem;
+        margin-bottom: 1rem;
+    }
+    
+    /* Processing status */
     .processing-status {
-        background-color: #e8f5e8;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        border-left: 4px solid #4caf50;
+        background: rgba(76, 175, 80, 0.1);
+        border: 2px solid rgba(76, 175, 80, 0.3);
+        border-radius: 15px;
+        padding: 1rem 1.25rem;
         margin: 1rem 0;
+        color: #2e7d32;
+        font-weight: 500;
+        text-align: center;
+    }
+    
+    /* Scrollbar styling */
+    .chat-container::-webkit-scrollbar {
+        width: 6px;
+    }
+    
+    .chat-container::-webkit-scrollbar-track {
+        background: #f1f1f1;
+        border-radius: 3px;
+    }
+    
+    .chat-container::-webkit-scrollbar-thumb {
+        background: #c1c1c1;
+        border-radius: 3px;
+    }
+    
+    .chat-container::-webkit-scrollbar-thumb:hover {
+        background: #a8a8a8;
+    }
+    
+    /* API Key input styling */
+    .api-key-container {
+        background: rgba(255,255,255,0.95);
+        border-radius: 15px;
+        padding: 1.5rem;
+        margin-bottom: 2rem;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    
+    .api-key-text {
+        color: #2c3e50;
+        font-weight: 500;
+        margin-bottom: 0.5rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -263,71 +457,6 @@ class FinancialRAGProcessor:
             st.error(f"Error creating vectorstore: {str(e)}")
             return False
     
-    def get_financial_prompt(self):
-        """Get the multimodal financial analysis prompt template"""
-        return PromptTemplate(
-            template="""You are an advanced multimodal financial analyst assistant specialized in analyzing SEC 10-K reports, financial documents, charts, graphs, and tabular data. 
-            
-            Use the following context to answer questions about financial data, company performance, risks, market analysis, visual trends, and numerical patterns.
-            
-            Context: {context}
-            
-            Chat History: {chat_history}
-            
-            Question: {input}
-            
-            ANALYSIS GUIDELINES:
-            - For TEXT data: Provide detailed financial analysis with specific numbers, ratios, and trends
-            - For TABLE data: Analyze financial metrics, perform calculations, identify patterns and trends
-            - For IMAGE data: Describe visual elements like charts, graphs, trends, and key insights
-            - Combine insights from all data types (text, tables, images) when available
-            - Always specify which type of data (text/table/image) your analysis is based on
-            - Include specific numbers, percentages, ratios, and financial metrics when available
-            - Highlight key financial trends, risks, and opportunities
-            
-            If you cannot find specific information in the provided context, clearly state that the information is not available in the provided documents.
-            
-            Answer:""",
-            input_variables=["context", "chat_history", "input"]
-        )
-    
-    def analyze_image_with_gemini(self, image_path: str, question: str) -> str:
-        """Analyze financial charts/images using Gemini 2.0 Flash multimodal capabilities"""
-        try:
-            # Read and encode image
-            with open(image_path, "rb") as image_file:
-                image_data = image_file.read()
-                image_base64 = base64.b64encode(image_data).decode()
-            
-            # Create multimodal prompt for financial image analysis
-            prompt = f"""
-            Analyze this financial chart/graph/visual element from a financial document.
-            
-            Question: {question}
-            
-            Please provide:
-            1. Description of the visual elements (chart type, axes, data points)
-            2. Key financial trends and patterns visible
-            3. Specific numbers, percentages, or values if readable
-            4. Financial insights and implications
-            5. Any risks or opportunities highlighted by the visual data
-            
-            Focus on actionable financial analysis and insights.
-            """
-            
-            # Use Google AI directly for multimodal analysis
-            model = genai.GenerativeModel('gemini-2.0-flash-exp')
-            response = model.generate_content([
-                prompt,
-                {"mime_type": "image/png", "data": image_base64}
-            ])
-            
-            return response.text
-            
-        except Exception as e:
-            st.error(f"Error analyzing image: {str(e)}")
-            return f"Could not analyze image: {os.path.basename(image_path)}"
-    
     def query_documents(self, question: str) -> str:
         """Query documents - OPTIMIZED VERSION"""
         try:
@@ -378,33 +507,43 @@ if "documents_processed" not in st.session_state:
 if "processing_status" not in st.session_state:
     st.session_state.processing_status = None
 
-# Main UI
-st.markdown('<h1 class="main-header">📊 Financial RAG Analyst</h1>', unsafe_allow_html=True)
+# Main container
+st.markdown('<div class="main-container">', unsafe_allow_html=True)
 
-# Sidebar
-with st.sidebar:
-    st.header("🔧 Configuration")
+# Title
+st.markdown('<h1 class="chat-title">Chat with your database</h1>', unsafe_allow_html=True)
+
+# API Key input
+if "google_api_key" not in st.session_state:
+    st.session_state.google_api_key = ""
+
+if not st.session_state.google_api_key:
+    st.markdown("""
+    <div class="api-key-container">
+        <div class="api-key-text">🔑 Please enter your Google API Key to get started</div>
+    </div>
+    """, unsafe_allow_html=True)
     
-    # API Key input
-    google_api_key = st.text_input(
-        "Google API Key",
-        type="password",
-        help="Enter your Google AI API key"
-    )
+    api_key = st.text_input("", type="password", placeholder="Enter your Google API Key...", key="api_input")
+    if api_key:
+        st.session_state.google_api_key = api_key
+        st.rerun()
+
+# File upload
+elif not st.session_state.documents_processed:
+    st.markdown("""
+    <div class="upload-area">
+        <div class="upload-text">📄 Upload your financial document to start analyzing</div>
+    </div>
+    """, unsafe_allow_html=True)
     
-    st.header("📄 Document Upload")
-    uploaded_file = st.file_uploader(
-        "Upload Financial Document (PDF)",
-        type=['pdf'],
-        help="Upload SEC 10-K reports or other financial documents"
-    )
+    uploaded_file = st.file_uploader("", type=['pdf'], label_visibility="collapsed")
     
-    # Auto-process when file is uploaded
-    if uploaded_file and google_api_key and not st.session_state.documents_processed:
+    if uploaded_file:
         # Initialize models automatically
         if not st.session_state.rag_processor.is_initialized:
             with st.spinner("🔄 Initializing AI models..."):
-                success = st.session_state.rag_processor.initialize_models(google_api_key)
+                success = st.session_state.rag_processor.initialize_models(st.session_state.google_api_key)
                 if success:
                     st.success("✅ Models initialized!")
                 else:
@@ -445,71 +584,75 @@ with st.sidebar:
                     st.error("❌ Failed to extract content from PDF")
             except Exception as e:
                 st.error(f"❌ Error processing document: {str(e)}")
-    
-    # Document statistics
-    if st.session_state.documents_processed:
-        st.header("📊 Document Stats")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Documents", len(st.session_state.rag_processor.documents))
-        with col2:
-            st.metric("Images", len(st.session_state.rag_processor.extracted_images))
-        
-        col3, col4 = st.columns(2)
-        with col3:
-            st.metric("Tables", len(st.session_state.rag_processor.extracted_tables))
-        with col4:
-            st.metric("Chat History", len(st.session_state.rag_processor.chat_history))
 
-# Main content area
-if not google_api_key:
-    st.info("👈 Please enter your Google API key in the sidebar to get started.")
-elif not uploaded_file:
-    st.info("👈 Please upload a financial document (PDF) to start analyzing.")
-elif not st.session_state.documents_processed:
-    st.info("🔄 Processing your document... Please wait.")
+# Chat interface
 else:
     # Show processing status
     if st.session_state.processing_status:
         st.markdown(f'<div class="processing-status">🎉 {st.session_state.processing_status}</div>', unsafe_allow_html=True)
     
-    # Sample questions for multimodal analysis
-    st.header("💡 Sample Questions")
-    sample_questions = [
-        "What are the key financial metrics shown in the charts and tables?",
-        "Analyze the revenue trends from both text and visual data",
-        "What risks are mentioned in text and shown in risk charts?",
-        "Compare the financial ratios across different data sources",
-        "What insights can you derive from the financial graphs and tables?",
-        "Analyze the company's performance using all available data types"
-    ]
-    
-    cols = st.columns(3)
-    for i, question in enumerate(sample_questions):
-        col_idx = i % 3
-        with cols[col_idx]:
+    # Sample questions (only show if no chat history)
+    if not st.session_state.rag_processor.chat_history:
+        sample_questions = [
+            "What are the company's key financial metrics and ratios?",
+            "Analyze the revenue trends and growth patterns over recent periods",
+            "What are the main risk factors mentioned in this financial report?",
+            "Compare the company's profitability margins with industry standards",
+            "What is the company's debt-to-equity ratio and financial leverage position?",
+            "Summarize the cash flow statement and liquidity position"
+        ]
+        
+        st.markdown('<div class="sample-questions">', unsafe_allow_html=True)
+        for i, question in enumerate(sample_questions):
             if st.button(question, key=f"sample_{i}"):
                 st.session_state.current_question = question
+                st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
     
-    # Chat interface
-    st.header("💬 Financial Analysis Chat")
+    # Chat container
+    st.markdown('<div class="chat-container">', unsafe_allow_html=True)
     
     # Display chat history
     for message in st.session_state.rag_processor.chat_history:
         if message["role"] == "user":
-            st.markdown(f'<div class="chat-message user-message"><strong>You:</strong> {message["content"]}</div>', unsafe_allow_html=True)
+            st.markdown(f'''
+            <div class="message-bubble user-message">
+                <div class="message-avatar user-avatar">U</div>
+                <div class="message-content">{message["content"]}</div>
+            </div>
+            ''', unsafe_allow_html=True)
         else:
-            st.markdown(f'<div class="chat-message assistant-message"><strong>Assistant:</strong> {message["content"]}</div>', unsafe_allow_html=True)
+            st.markdown(f'''
+            <div class="message-bubble assistant-message">
+                <div class="message-avatar assistant-avatar">AI</div>
+                <div class="message-content">{message["content"]}</div>
+            </div>
+            ''', unsafe_allow_html=True)
     
-    # Query input
-    query = st.text_input(
-        "Ask a question about the financial document:",
-        value=st.session_state.get("current_question", ""),
-        key="query_input"
-    )
+    st.markdown('</div>', unsafe_allow_html=True)
     
-    if st.button("🔍 Analyze", type="primary") and query:
-        with st.spinner("🔍 Analyzing document..."):
+    # Input area
+    st.markdown('<div class="input-container">', unsafe_allow_html=True)
+    
+    col1, col2 = st.columns([10, 1])
+    
+    with col1:
+        query = st.text_input(
+            "",
+            value=st.session_state.get("current_question", ""),
+            placeholder="Ask about your data...",
+            key="query_input",
+            label_visibility="collapsed"
+        )
+    
+    with col2:
+        send_clicked = st.button("→", key="send_btn", help="Send message")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Process query
+    if (send_clicked or st.session_state.get("current_question")) and query:
+        with st.spinner("🔍 Analyzing..."):
             response = st.session_state.rag_processor.query_documents(query)
             
             # Clear current question
@@ -517,56 +660,5 @@ else:
                 del st.session_state.current_question
             
             st.rerun()
-    
-    # Document preview section with multimodal content
-    with st.expander("📋 Multimodal Document Preview", expanded=False):
-        tab1, tab2, tab3 = st.tabs(["📄 Text Content", "📊 Tables", "🖼️ Images"])
-        
-        with tab1:
-            if st.session_state.rag_processor.documents:
-                text_docs = [doc for doc in st.session_state.rag_processor.documents if doc.metadata.get("type") == "text"]
-                if text_docs:
-                    st.markdown("### Text Content Sample")
-                    st.markdown(f'<div class="document-preview">{text_docs[0].page_content[:1000]}...</div>', unsafe_allow_html=True)
-                else:
-                    st.info("No text content found")
-        
-        with tab2:
-            if st.session_state.rag_processor.extracted_tables:
-                st.markdown("### Extracted Financial Tables")
-                for i, table in enumerate(st.session_state.rag_processor.extracted_tables[:3]):
-                    st.markdown(f"**Table {i+1}:**")
-                    st.text(table["content"][:500] + "..." if len(table["content"]) > 500 else table["content"])
-            else:
-                st.info("No tables found")
-        
-        with tab3:
-            if st.session_state.rag_processor.extracted_images:
-                st.markdown("### Extracted Financial Charts/Images")
-                for i, img_info in enumerate(st.session_state.rag_processor.extracted_images[:5]):
-                    try:
-                        if os.path.exists(img_info["path"]):
-                            st.markdown(f"**Image {i+1}: {img_info['filename']}**")
-                            image = Image.open(img_info["path"])
-                            st.image(image, caption=f"Financial Chart/Graph {i+1}", use_column_width=True)
-                    except Exception as e:
-                        st.error(f"Could not display image {i+1}: {str(e)}")
-            else:
-                st.info("No images found")
-    
-    # Clear chat history
-    if st.button("🗑️ Clear Chat History"):
-        st.session_state.rag_processor.chat_history = []
-        st.rerun()
 
-# Footer
-st.markdown("---")
-st.markdown(
-    """
-    <div style='text-align: center; color: #666;'>
-        <p>Multimodal Financial RAG Analyst - Powered by Gemini 2.0 Flash & LangChain</p>
-        <p>Advanced analysis of text, tables, charts, and images in financial documents</p>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+st.markdown('</div>', unsafe_allow_html=True)
