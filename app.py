@@ -1,25 +1,11 @@
-import os
-# Nonaktifkan file watcher Streamlit untuk menghindari konflik dengan PyTorch
-os.environ["STREAMLIT_SERVER_ENABLE_FILE_WATCHER"] = "false"
-
 import streamlit as st
-import torch
-# Patch PyTorch path handling
-torch.classes.__path__ = []
-
-import asyncio
-from typing import List, Dict, Any
+import os
 import tempfile
-from pathlib import Path
-import requests
-import re
-from urllib.parse import urlparse, urljoin
-import time
-
-# PDF conversion imports
-# import pdfkit # Dihapus
+import base64
+from typing import List, Dict, Any
+import pandas as pd
+from PIL import Image
 import io
-from weasyprint import HTML # Menambahkan import weasyprint
 
 # LangChain imports
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -37,735 +23,572 @@ from langchain.chains.history_aware_retriever import create_history_aware_retrie
 from unstructured.partition.pdf import partition_pdf
 from unstructured.chunking.title import chunk_by_title
 
-# Other imports
 import google.generativeai as genai
-from sentence_transformers import SentenceTransformer
 
-class SECDocumentProcessor:
-    """Class for processing SEC documents from URLs"""
-    
+# Configure page
+st.set_page_config(
+    page_title="Financial RAG Analyst",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Custom CSS
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: bold;
+        color: #1f77b4;
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+    .metric-card {
+        background-color: #f0f2f6;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin: 0.5rem 0;
+    }
+    .chat-message {
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin: 0.5rem 0;
+    }
+    .user-message {
+        background-color: #e3f2fd;
+        border-left: 4px solid #2196f3;
+    }
+    .assistant-message {
+        background-color: #f3e5f5;
+        border-left: 4px solid #9c27b0;
+    }
+    .document-preview {
+        max-height: 400px;
+        overflow-y: auto;
+        border: 1px solid #ddd;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        background-color: #fafafa;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+class FinancialRAGProcessor:
     def __init__(self):
-        # self.wkhtmltopdf_options = { # Dihapus karena tidak lagi diperlukan
-        #     'page-size': 'A4',
-        #     'margin-top': '0.75in',
-        #     'margin-right': '0.75in',
-        #     'margin-bottom': '0.75in',
-        #     'margin-left': '0.75in',
-        #     'encoding': "UTF-8",
-        #     'no-outline': None,
-        #     'enable-local-file-access': None
-        # }
         self.embeddings = None
         self.vectorstore = None
+        self.retriever = None
         self.llm = None
         self.memory = None
-        self.conversation_chain = None
-    
-    def validate_sec_url(self, url: str) -> bool:
-        """Validate if URL is from SEC website"""
-        parsed_url = urlparse(url)
-        return parsed_url.netloc in ['www.sec.gov', 'sec.gov']
-    
-    def extract_company_info(self, url: str) -> Dict[str, str]:
-        """Extract company information from SEC URL"""
+        self.documents = []
+        self.extracted_tables = []
+        self.extracted_images = []
+        
+    def initialize_models(self, google_api_key: str):
+        """Initialize the LLM and embeddings"""
         try:
-            # Extract CIK and document info from URL pattern
-            cik_match = re.search(r'/data/(\d+)/', url)
-            filename_match = re.search(r'/([^/]+\.htm?)', url)
+            # Configure Google AI
+            genai.configure(api_key=google_api_key)
             
-            if cik_match and filename_match:
-                return {
-                    'cik': cik_match.group(1),
-                    'filename': filename_match.group(1)
-                }
-            return None
-        except Exception as e:
-            st.error(f"Error extracting company info: {str(e)}")
-            return None
-
-    def get_document_metadata(self, url: str) -> Dict[str, Any]:
-        """Get metadata from SEC document URL"""
-        try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }
-            response = requests.head(url, headers=headers, allow_redirects=True)
-            
-            metadata = {
-                'url': url,
-                'status_code': response.status_code,
-                'content_type': response.headers.get('content-type', 'Unknown'),
-                'content_length': response.headers.get('content-length', 'Unknown'),
-                'last_modified': response.headers.get('last-modified', 'Unknown')
-            }
-            
-            return metadata
-            
-        except Exception as e:
-            st.error(f"Error getting document metadata: {str(e)}")
-            return {
-                'url': url,
-                'status_code': 'Error',
-                'content_type': 'Unknown',
-                'content_length': 'Unknown',
-                'last_modified': 'Unknown'
-            }
-
-    def convert_url_to_pdf(self, url: str) -> str:
-        """Convert SEC document URL to PDF and save to a temporary file using WeasyPrint"""
-        try:
-            # Headers khusus untuk SEC.gov
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
-                'Sec-Fetch-User': '?1',
-                'Cache-Control': 'no-cache',
-                'Pragma': 'no-cache',
-                'Referer': 'https://www.sec.gov/',
-                'Origin': 'https://www.sec.gov'
-            }
-            
-            # Buat session untuk menjaga cookies
-            session = requests.Session()
-            
-            # Tambahkan delay untuk menghindari rate limiting
-            time.sleep(3)
-            
-            # Coba download dengan session dan timeout yang lebih lama
-            response = session.get(
-                url, 
-                headers=headers, 
-                timeout=60,
-                allow_redirects=True
-            )
-            
-            # Cek status code
-            if response.status_code == 403:
-                st.error("Access denied by SEC.gov. Possible solutions:\n"
-                        "1. URL mungkin memerlukan autentikasi\n"
-                        "2. Dokumen mungkin tidak tersedia untuk umum\n"
-                        "3. Coba akses melalui browser terlebih dahulu")
-                raise requests.exceptions.HTTPError("403 Forbidden")
-                
-            response.raise_for_status()
-            
-            # Tambahkan delay sebelum konversi
-            time.sleep(2)
-            
-            # Gunakan HTML content untuk WeasyPrint
-            htmldoc = HTML(string=response.text)
-            
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf_file:
-                htmldoc.write_pdf(tmp_pdf_file.name)
-                pdf_path = tmp_pdf_file.name
-            
-            st.success(f"Document converted and saved to {pdf_path}")
-            return pdf_path
-            
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 403:
-                st.error("Access denied by SEC.gov. Please try:\n"
-                        "1. Verifikasi URL di browser\n"
-                        "2. Pastikan dokumen tersedia untuk umum\n"
-                        "3. Tunggu beberapa menit dan coba lagi")
-            else:
-                st.error(f"HTTP Error: {str(e)}")
-            raise
-        except requests.exceptions.Timeout:
-            st.error("Request timed out. Please try again.")
-            raise
-        except Exception as e:
-            st.error(f"Failed to convert URL to PDF: {str(e)}")
-            raise
-
-    def initialize_embeddings(self):
-        """Initialize Qwen embeddings from Hugging Face"""
-        try:
-            # Using exact model from the image: Qwen/Qwen3-Embedding-0.6B
-            model_name = "Qwen/Qwen3-Embedding-0.6B"
-            self.embeddings = HuggingFaceEmbeddings(
-                model_name=model_name,
-                model_kwargs={
-                    'device': 'cpu',
-                    'trust_remote_code': True  # Required for Qwen models
-                },
-                encode_kwargs={'normalize_embeddings': True}
-            )
-            st.success(f"✅ Qwen3-Embedding-0.6B initialized successfully")
-            return True
-        except Exception as e:
-            st.error(f"Error initializing Qwen embeddings: {str(e)}")
-            # Fallback to sentence-transformers if Qwen fails
-            try:
-                self.embeddings = HuggingFaceEmbeddings(
-                    model_name="sentence-transformers/all-MiniLM-L6-v2"
-                )
-                st.warning("Using fallback embedding model: all-MiniLM-L6-v2")
-                return True
-            except Exception as fallback_e:
-                st.error(f"Fallback embedding also failed: {str(fallback_e)}")
-                return False
-    
-    def initialize_llm(self, api_key: str):
-        """Initialize Gemini LLM"""
-        try:
-            genai.configure(api_key=api_key)
+            # Initialize LLM with multimodal capabilities
             self.llm = ChatGoogleGenerativeAI(
-                model="gemini-1.5-pro",
-                google_api_key=api_key,
+                model="gemini-2.0-flash-exp",
+                google_api_key=google_api_key,
                 temperature=0.3,
                 convert_system_message_to_human=True
             )
+            
+            # Initialize embeddings
+            self.embeddings = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-MiniLM-L6-v2"
+            )
+            
+            # Initialize memory
+            self.memory = ConversationBufferMemory(
+                memory_key="chat_history",
+                return_messages=True
+            )
+            
             return True
         except Exception as e:
-            st.error(f"Error initializing Gemini LLM: {str(e)}")
+            st.error(f"Error initializing models: {str(e)}")
             return False
     
-    def process_pdf_with_unstructured(self, pdf_file) -> List[Document]:
-        """Process PDF using Unstructured library"""
-        documents = []
-        
+    def extract_pdf_content(self, pdf_file) -> Dict[str, Any]:
+        """Extract comprehensive content from PDF including text, images, and tables"""
         try:
-            # Save uploaded file to temporary location
+            # Save uploaded file temporarily
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
                 tmp_file.write(pdf_file.getvalue())
                 tmp_file_path = tmp_file.name
             
-            # Process PDF with unstructured
+            # Create temp directory for images
+            image_output_dir = tempfile.mkdtemp()
+            
+            # Partition PDF with advanced settings for multimodal extraction
             elements = partition_pdf(
                 filename=tmp_file_path,
-                strategy="hi_res",  # High resolution for better text extraction
-                infer_table_structure=True,  # Important for financial documents
                 extract_images_in_pdf=True,
-                chunking_strategy="by_title"
+                infer_table_structure=True,
+                chunking_strategy="by_title",
+                max_characters=4000,
+                new_after_n_chars=3800,
+                combine_text_under_n_chars=2000,
+                image_output_dir_path=image_output_dir
             )
             
-            # Convert elements to documents
+            # Separate different types of content
+            text_elements = []
+            table_elements = []
+            image_elements = []
+            extracted_image_paths = []
+            
+            # Get extracted image files
+            if os.path.exists(image_output_dir):
+                for filename in os.listdir(image_output_dir):
+                    if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                        extracted_image_paths.append(os.path.join(image_output_dir, filename))
+            
             for element in elements:
-                if hasattr(element, 'text') and element.text.strip():
-                    # Add metadata for better context
-                    metadata = {
-                        'source': pdf_file.name,
-                        'element_type': str(type(element).__name__),
-                        'page_number': getattr(element, 'metadata', {}).get('page_number', 'unknown')
-                    }
-                    
-                    documents.append(Document(
-                        page_content=element.text,
-                        metadata=metadata
-                    ))
+                if hasattr(element, 'category'):
+                    if element.category == "Table":
+                        table_elements.append(element)
+                    elif element.category == "Image":
+                        image_elements.append(element)
+                    else:
+                        text_elements.append(element)
+                else:
+                    text_elements.append(element)
             
             # Clean up temporary file
             os.unlink(tmp_file_path)
             
-            return documents
+            return {
+                "text_elements": text_elements,
+                "table_elements": table_elements,
+                "image_elements": image_elements,
+                "extracted_image_paths": extracted_image_paths,
+                "image_output_dir": image_output_dir,
+                "total_elements": len(elements)
+            }
             
         except Exception as e:
-            st.error(f"Error processing PDF: {str(e)}")
-            return []
+            st.error(f"Error extracting PDF content: {str(e)}")
+            return None
     
-    def create_vectorstore(self, documents: List[Document]):
-        """Create FAISS vectorstore from documents"""
-        if not documents:
-            st.error("No documents to process")
-            return False
-        
+    def process_documents(self, extracted_content: Dict[str, Any]):
+        """Process extracted content into LangChain documents with multimodal support"""
         try:
-            # Split documents into smaller chunks for better retrieval
+            documents = []
+            
+            # Process text elements
+            for i, element in enumerate(extracted_content["text_elements"]):
+                content = str(element)
+                if content.strip():
+                    doc = Document(
+                        page_content=content,
+                        metadata={
+                            "type": "text",
+                            "element_id": i,
+                            "category": getattr(element, 'category', 'Unknown')
+                        }
+                    )
+                    documents.append(doc)
+            
+            # Process table elements with enhanced metadata
+            for i, element in enumerate(extracted_content["table_elements"]):
+                content = str(element)
+                if content.strip():
+                    doc = Document(
+                        page_content=f"FINANCIAL TABLE DATA: {content}",
+                        metadata={
+                            "type": "table",
+                            "element_id": i,
+                            "category": "Financial_Table",
+                            "analysis_type": "tabular_data"
+                        }
+                    )
+                    documents.append(doc)
+                    self.extracted_tables.append({
+                        "id": i,
+                        "content": content,
+                        "raw_element": element
+                    })
+            
+            # Process image elements with paths for multimodal analysis
+            for i, image_path in enumerate(extracted_content.get("extracted_image_paths", [])):
+                if os.path.exists(image_path):
+                    # Create description document for image
+                    doc = Document(
+                        page_content=f"FINANCIAL CHART/GRAPH: Image extracted from document - {os.path.basename(image_path)}",
+                        metadata={
+                            "type": "image",
+                            "element_id": i,
+                            "category": "Financial_Visual",
+                            "image_path": image_path,
+                            "analysis_type": "visual_data"
+                        }
+                    )
+                    documents.append(doc)
+                    self.extracted_images.append({
+                        "id": i,
+                        "path": image_path,
+                        "filename": os.path.basename(image_path)
+                    })
+            
+            self.documents = documents
+            return len(documents)
+            
+        except Exception as e:
+            st.error(f"Error processing documents: {str(e)}")
+            return 0
+    
+    def create_vectorstore(self):
+        """Create FAISS vectorstore from processed documents"""
+        try:
+            if not self.documents:
+                st.error("No documents to process")
+                return False
+            
+            # Split documents
             text_splitter = RecursiveCharacterTextSplitter(
                 chunk_size=1000,
                 chunk_overlap=200,
-                length_function=len,
-                separators=["\n\n", "\n", ". ", " ", ""]
+                length_function=len
             )
             
-            split_documents = text_splitter.split_documents(documents)
+            split_docs = text_splitter.split_documents(self.documents)
             
             # Create vectorstore
-            self.vectorstore = FAISS.from_documents(
-                documents=split_documents,
-                embedding=self.embeddings
+            self.vectorstore = FAISS.from_documents(split_docs, self.embeddings)
+            self.retriever = self.vectorstore.as_retriever(
+                search_type="similarity",
+                search_kwargs={"k": 5}
             )
             
-            st.success(f"Created vectorstore with {len(split_documents)} document chunks")
             return True
             
         except Exception as e:
             st.error(f"Error creating vectorstore: {str(e)}")
             return False
     
-    def setup_conversation_chain(self):
-        """Setup conversational retrieval chain with memory"""
-        if not self.vectorstore or not self.llm:
-            return False
-        
+    def get_financial_prompt(self):
+        """Get the multimodal financial analysis prompt template"""
+        return PromptTemplate(
+            template="""You are an advanced multimodal financial analyst assistant specialized in analyzing SEC 10-K reports, financial documents, charts, graphs, and tabular data. 
+            You can process and analyze text, images (charts/graphs), and structured table data to provide comprehensive financial insights.
+            
+            Use the following context to answer questions about financial data, company performance, risks, market analysis, visual trends, and numerical patterns.
+            
+            Context: {context}
+            
+            Chat History: {chat_history}
+            
+            Question: {input}
+            
+            ANALYSIS GUIDELINES:
+            - For TEXT data: Provide detailed financial analysis with specific numbers, ratios, and trends
+            - For TABLE data: Analyze financial metrics, perform calculations, identify patterns and trends
+            - For IMAGE data: Describe visual elements like charts, graphs, trends, and key insights
+            - Combine insights from all data types (text, tables, images) when available
+            - Always specify which type of data (text/table/image) your analysis is based on
+            - Include specific numbers, percentages, ratios, and financial metrics when available
+            - Highlight key financial trends, risks, and opportunities
+            
+            If you cannot find specific information in the provided context, clearly state that the information is not available in the provided documents.
+            
+            Answer:""",
+            input_variables=["context", "chat_history", "input"]
+        )
+    
+    def analyze_image_with_gemini(self, image_path: str, question: str) -> str:
+        """Analyze financial charts/images using Gemini 2.0 Flash multimodal capabilities"""
         try:
-            # Create memory for conversation history
-            self.memory = ConversationBufferMemory(
-                memory_key="chat_history",
-                return_messages=True,
-                output_key="answer"
-            )
+            # Read and encode image
+            with open(image_path, "rb") as image_file:
+                image_data = image_file.read()
+                image_base64 = base64.b64encode(image_data).decode()
             
-            # Custom prompt for financial analysis
-            financial_prompt = PromptTemplate(
-                template="""You are a financial analyst assistant specialized in analyzing SEC 10-K reports and financial documents. 
-                Use the following context to answer questions about financial data, company performance, risks, and market analysis.
-                
-                Context: {context}
-                
-                Chat History: {chat_history}
-                
-                Question: {question}
-                
-                Provide detailed, accurate financial analysis based on the document context. Include specific numbers, ratios, and trends when available.
-                If you cannot find the specific information in the context, clearly state that the information is not available in the provided documents.
-                
-                Answer:""",
-                input_variables=["context", "chat_history", "question"]
-            )
+            # Create multimodal prompt for financial image analysis
+            prompt = f"""
+            Analyze this financial chart/graph/visual element from a financial document.
             
-            # Create history aware retriever
-            history_aware_retriever = create_history_aware_retriever(
-                llm=self.llm,
-                retriever=self.vectorstore.as_retriever(
-                    search_type="similarity",
-                    search_kwargs={"k": 5}
-                ),
-                rephraser_prompt=financial_prompt
-            )
+            Question: {question}
             
-            # Create document chain
-            document_chain = create_stuff_documents_chain(
-                llm=self.llm,
-                prompt=financial_prompt
-            )
+            Please provide:
+            1. Description of the visual elements (chart type, axes, data points)
+            2. Key financial trends and patterns visible
+            3. Specific numbers, percentages, or values if readable
+            4. Financial insights and implications
+            5. Any risks or opportunities highlighted by the visual data
             
-            # Create retrieval chain
-            self.conversation_chain = create_retrieval_chain(
-                retriever=history_aware_retriever,
-                combine_docs_chain=document_chain
-            )
+            Focus on actionable financial analysis and insights.
+            """
             
-            return True
+            # Use Google AI directly for multimodal analysis
+            model = genai.GenerativeModel('gemini-2.0-flash-exp')
+            response = model.generate_content([
+                prompt,
+                {"mime_type": "image/png", "data": image_base64}
+            ])
+            
+            return response.text
             
         except Exception as e:
-            st.error(f"Error setting up conversation chain: {str(e)}")
-            return False
+            st.error(f"Error analyzing image: {str(e)}")
+            return f"Could not analyze image: {os.path.basename(image_path)}"
     
-    def query(self, question: str) -> Dict[str, Any]:
-        """Query the chatbot"""
-        if not self.conversation_chain:
-            return {"error": "Chatbot not properly initialized"}
-        
+    def query_documents(self, question: str) -> str:
+        """Query documents with multimodal capabilities (text, tables, images)"""
         try:
-            response = self.conversation_chain.invoke({
-                "question": question,
-                "chat_history": self.memory.chat_memory.messages if self.memory else []
-            })
+            if not self.retriever:
+                return "Please upload and process a document first."
             
-            # Update memory
-            if self.memory:
-                self.memory.save_context(
-                    {"input": question},
-                    {"output": response["answer"]}
+            # Get relevant documents
+            relevant_docs = self.retriever.get_relevant_documents(question)
+            
+            # Separate different types of content
+            text_context = []
+            table_context = []
+            image_analyses = []
+            
+            for doc in relevant_docs:
+                doc_type = doc.metadata.get("type", "text")
+                
+                if doc_type == "text":
+                    text_context.append(doc.page_content)
+                elif doc_type == "table":
+                    table_context.append(doc.page_content)
+                elif doc_type == "image" and "image_path" in doc.metadata:
+                    # Analyze image with Gemini multimodal
+                    image_path = doc.metadata["image_path"]
+                    if os.path.exists(image_path):
+                        image_analysis = self.analyze_image_with_gemini(image_path, question)
+                        image_analyses.append(f"IMAGE ANALYSIS: {image_analysis}")
+            
+            # Combine all context types
+            combined_context = []
+            
+            if text_context:
+                combined_context.append("TEXT CONTENT:\n" + "\n".join(text_context))
+            
+            if table_context:
+                combined_context.append("TABLE DATA:\n" + "\n".join(table_context))
+            
+            if image_analyses:
+                combined_context.append("VISUAL ANALYSIS:\n" + "\n".join(image_analyses))
+            
+            full_context = "\n\n".join(combined_context)
+            
+            # Create enhanced retrieval chain
+            prompt = self.get_financial_prompt()
+            
+            # Get chat history
+            chat_history = self.memory.chat_memory.messages
+            chat_history_str = ""
+            for msg in chat_history[-6:]:  # Last 6 messages for context
+                if hasattr(msg, 'content'):
+                    chat_history_str += f"{msg.__class__.__name__}: {msg.content}\n"
+            
+            # Generate response using the multimodal context
+            response = self.llm.invoke(
+                prompt.format(
+                    context=full_context,
+                    chat_history=chat_history_str,
+                    input=question
                 )
+            )
             
-            return {
-                "answer": response["answer"],
-                "source_documents": response.get("source_documents", [])
-            }
+            # Save to memory
+            self.memory.save_context({"input": question}, {"output": response.content})
+            
+            return response.content
+            
         except Exception as e:
-            return {"error": f"Error processing query: {str(e)}"}
+            st.error(f"Error querying documents: {str(e)}")
+            return "Sorry, I encountered an error while processing your question."
 
-# Wrapper class for the Streamlit UI
-class FinancialRAGChatbot:
-    """Class untuk chatbot RAG khusus analisis finansial yang membungkus SECDocumentProcessor"""
-    
-    def __init__(self):
-        self.processor = SECDocumentProcessor()
-        
-    def initialize_embeddings(self):
-        return self.processor.initialize_embeddings()
-    
-    def initialize_llm(self, api_key: str):
-        return self.processor.initialize_llm(api_key)
-        
-    def process_pdf_with_unstructured(self, pdf_file) -> List[Document]:
-        return self.processor.process_pdf_with_unstructured(pdf_file)
-    
-    def create_vectorstore(self, documents: List[Document]):
-        return self.processor.create_vectorstore(documents)
-    
-    def setup_conversation_chain(self):
-        return self.processor.setup_conversation_chain()
-    
-    def query(self, question: str) -> Dict[str, Any]:
-        return self.processor.query(question)
+# Initialize session state
+if "rag_processor" not in st.session_state:
+    st.session_state.rag_processor = FinancialRAGProcessor()
 
-def sec_url_input_page():
-    """Page for SEC URL input and conversion"""
-    st.set_page_config(
-        page_title="SEC Document Processor",
-        page_icon="📄",
-        layout="wide"
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
+if "documents_processed" not in st.session_state:
+    st.session_state.documents_processed = False
+
+# Main UI
+st.markdown('<h1 class="main-header">📊 Financial RAG Analyst</h1>', unsafe_allow_html=True)
+
+# Sidebar
+with st.sidebar:
+    st.header("🔧 Configuration")
+    
+    # API Key input
+    google_api_key = st.text_input(
+        "Google API Key",
+        type="password",
+        help="Enter your Google AI API key"
     )
     
-    st.title("📄 SEC Document Processor")
-    st.markdown("*Convert SEC documents to PDF for financial analysis*")
-    
-    # Initialize SEC processor
-    if 'sec_processor' not in st.session_state:
-        st.session_state.sec_processor = SECDocumentProcessor()
-    
-    # URL input section
-    st.header("🔗 Enter SEC Document URL")
-    
-    # Example URLs for reference
-    with st.expander("📋 Example SEC URLs"):
-        st.markdown("""
-        **Tesla 10-K Report:**
-        ```
-        https://www.sec.gov/Archives/edgar/data/1318605/000156459020047486/tsla-ex101_69.htm
-        ```
-        
-        **Apple 10-K Report:**
-        ```
-        https://www.sec.gov/Archives/edgar/data/320193/000032019323000077/aapl-20230930.htm
-        ```
-        
-        **Microsoft 10-K Report:**
-        ```
-        https://www.sec.gov/Archives/edgar/data/789019/000156459023034948/msft-ex101_6.htm
-        ```
-        """)
-    
-    # URL input
-    sec_url = st.text_input(
-        "SEC Document URL:",
-        placeholder="https://www.sec.gov/Archives/edgar/data/...",
-        help="Enter the full URL of the SEC document you want to analyze"
-    )
-    
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        if st.button("🔍 Validate URL", disabled=not sec_url):
-            if sec_url:
-                processor = st.session_state.sec_processor
-                
-                if processor.validate_sec_url(sec_url):
-                    st.success("✅ Valid SEC URL")
-                    
-                    # Get document metadata
-                    with st.spinner("Getting document information..."):
-                        metadata = processor.get_document_metadata(sec_url)
-                        company_info = processor.extract_company_info(sec_url)
-                    
-                    # Display document info
-                    st.subheader("📊 Document Information")
-                    col_info1, col_info2 = st.columns(2)
-                    
-                    with col_info1:
-                        st.write(f"**CIK:** {company_info['cik']}")
-                        st.write(f"**Filename:** {company_info['filename']}")
-                        st.write(f"**Status:** {metadata.get('status_code', 'Unknown')}")
-                    
-                    with col_info2:
-                        st.write(f"**Content Type:** {metadata.get('content_type', 'Unknown')}")
-                        st.write(f"**Size:** {metadata.get('content_length', 'Unknown')}")
-                        st.write(f"**Last Modified:** {metadata.get('last_modified', 'Unknown')}")
-                    
-                    st.session_state.validated_url = sec_url
-                    st.session_state.document_info = {**company_info, **metadata}
-                    
+    if google_api_key:
+        if st.session_state.rag_processor.llm is None:
+            with st.spinner("Initializing models..."):
+                success = st.session_state.rag_processor.initialize_models(google_api_key)
+                if success:
+                    st.success("✅ Models initialized!")
                 else:
-                    st.error("❌ Invalid URL. Please enter a valid SEC document URL.")
+                    st.error("❌ Failed to initialize models")
     
-    with col2:
-        if st.button("📄 Convert to PDF & Analyze", disabled=not hasattr(st.session_state, 'validated_url')):
-            if hasattr(st.session_state, 'validated_url'):
-                try:
-                    processor = st.session_state.sec_processor
-                    
-                    with st.spinner("Converting SEC document to PDF..."):
-                        # Convert URL to PDF (menggunakan asyncio.run untuk memanggil fungsi async)
-                        pdf_path = asyncio.run(processor.convert_url_to_pdf(st.session_state.validated_url))
-                        st.session_state.converted_pdf_path = pdf_path
-                        st.session_state.show_chatbot = True
-                    
-                    st.success("✅ Document converted successfully!")
-                    st.info("🚀 Redirecting to analysis interface...")
-                    
-                    # Small delay before rerun
-                    time.sleep(1)
-                    st.rerun()
-                    
-                except Exception as e:
-                    st.error(f"❌ Conversion failed: {str(e)}")
-    
-    # Installation instructions
-    st.divider()
-    st.header("⚙️ Setup Instructions")
-    
-    with st.expander("📦 Required Dependencies"):
-        st.markdown("""
-        **Instal WeasyPrint dependencies (pastikan memiliki paket-paket yang diperlukan seperti pango, cairo, dll.):**
-        ```bash
-        # Contoh di Ubuntu/Debian:
-        sudo apt-get install libpango1.0-0 libpangocairo-1.0-0 libgdk-pixbuf2.0-0 libcairo2 libffi-dev
-        # Untuk sistem lain, lihat dokumentasi WeasyPrint: https://doc.courtbouillon.org/weasyprint/stable/install.html
-        ```
-        
-        **Python packages:**
-        ```bash
-        pip install -r requirements.txt
-        ```
-        """)
-
-def main():
-    # Check if we should show chatbot or URL input
-    if not hasattr(st.session_state, 'show_chatbot') or not st.session_state.show_chatbot:
-        sec_url_input_page()
-        return
-    
-    # Main chatbot interface
-    st.set_page_config(
-        page_title="Financial RAG Chatbot",
-        page_icon="📊",
-        layout="wide"
+    st.header("📄 Document Upload")
+    uploaded_file = st.file_uploader(
+        "Upload Financial Document (PDF)",
+        type=['pdf'],
+        help="Upload SEC 10-K reports or other financial documents"
     )
     
-    st.title("📊 Financial Analysis RAG Chatbot")
-    st.markdown("*Analyzing SEC document with AI-powered insights*")
-    
-    # Show document info
-    if hasattr(st.session_state, 'document_info'):
-        with st.expander("📄 Document Information", expanded=False):
-            doc_info = st.session_state.document_info
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.write(f"**CIK:** {doc_info.get('cik', 'N/A')}")
-                st.write(f"**Filename:** {doc_info.get('filename', 'N/A')}")
-            with col2:
-                st.write(f"**URL:** {doc_info.get('url', 'N/A')}")
-                st.write(f"**Status:** {doc_info.get('status_code', 'N/A')}")
-            with col3:
-                if st.button("🔄 Process New Document"):
-                    # Reset session state
-                    for key in ['show_chatbot', 'converted_pdf_path', 'document_info', 'validated_url']:
-                        if key in st.session_state:
-                            del st.session_state[key]
-                    st.rerun()
-    
-    # Initialize session state
-    if 'chatbot' not in st.session_state:
-        st.session_state.chatbot = FinancialRAGChatbot()
-    if 'chat_history' not in st.session_state:
-        st.session_state.chat_history = []
-    if 'vectorstore_ready' not in st.session_state:
-        st.session_state.vectorstore_ready = False
-    
-    # Sidebar for configuration
-    with st.sidebar:
-        st.header("⚙️ Configuration")
-        
-        # Gemini API Key
-        gemini_api_key = st.text_input(
-            "Gemini API Key",
-            type="password",
-            help="Enter your Google Gemini API key"
-        )
-        
-        if gemini_api_key:
-            if st.session_state.chatbot.initialize_llm(gemini_api_key):
-                st.success("✅ Gemini LLM initialized")
-            
-        # Initialize embeddings
-        if st.button("Initialize Embeddings"):
-            with st.spinner("Loading Qwen embeddings..."):
-                if st.session_state.chatbot.initialize_embeddings():
-                    st.success("✅ Embeddings initialized")
-        
-        st.divider()
-        
-        # File upload
-        st.header("📄 Document Processing")
-        
-        # Auto-load converted PDF if available
-        if hasattr(st.session_state, 'converted_pdf_path') and os.path.exists(st.session_state.converted_pdf_path):
-            st.info(f"📄 Converted PDF ready: {os.path.basename(st.session_state.converted_pdf_path)}")
-            
-            if st.button("🚀 Process Converted Document") and st.session_state.chatbot.processor.embeddings:
-                with st.spinner("Processing converted SEC document..."):
-                    # Read the converted PDF
-                    with open(st.session_state.converted_pdf_path, 'rb') as f:
-                        pdf_data = f.read()
+    if uploaded_file and google_api_key:
+        if st.button("🚀 Process Document", type="primary"):
+            with st.spinner("Extracting content from PDF..."):
+                # Extract content
+                extracted_content = st.session_state.rag_processor.extract_pdf_content(uploaded_file)
+                
+                if extracted_content:
+                    st.success(f"✅ Extracted {extracted_content['total_elements']} elements")
                     
-                    # Create a file-like object
-                    class PDFFileObj:
-                        def __init__(self, data, name):
-                            self.data = data
-                            self.name = name
-                        def getvalue(self):
-                            return self.data
+                    # Process documents
+                    with st.spinner("Processing documents..."):
+                        doc_count = st.session_state.rag_processor.process_documents(extracted_content)
+                        st.success(f"✅ Processed {doc_count} document chunks")
                     
-                    pdf_file = PDFFileObj(pdf_data, os.path.basename(st.session_state.converted_pdf_path))
-                    
-                    # Process the PDF
-                    documents = st.session_state.chatbot.process_pdf_with_unstructured(pdf_file)
-                    
-                    if documents:
-                        if st.session_state.chatbot.create_vectorstore(documents):
-                            if st.session_state.chatbot.setup_conversation_chain():
-                                st.session_state.vectorstore_ready = True
-                                st.success("✅ SEC document processed and ready for analysis!")
-                            else:
-                                st.error("Failed to setup conversation chain")
+                    # Create vectorstore
+                    with st.spinner("Creating knowledge base..."):
+                        if st.session_state.rag_processor.create_vectorstore():
+                            st.success("✅ Knowledge base created!")
+                            st.session_state.documents_processed = True
                         else:
-                            st.error("Failed to create vectorstore")
-                    else:
-                        st.error("No content extracted from document")
-        else:
-            st.info("Upload additional PDF files if needed")
-        
-        uploaded_files = st.file_uploader(
-            "Upload additional PDF files (optional)",
-            type=['pdf'],
-            accept_multiple_files=True,
-            help="Upload additional SEC reports or financial documents"
-        )
-        
-        if uploaded_files and st.session_state.chatbot.processor.embeddings:
-            if st.button("Process Documents"):
-                all_documents = []
-                
-                progress_bar = st.progress(0)
-                for i, uploaded_file in enumerate(uploaded_files):
-                    st.info(f"Processing {uploaded_file.name}...")
-                    
-                    documents = st.session_state.chatbot.process_pdf_with_unstructured(uploaded_file)
-                    all_documents.extend(documents)
-                    
-                    progress_bar.progress((i + 1) / len(uploaded_files))
-                
-                if all_documents:
-                    st.info("Creating vectorstore...")
-                    if st.session_state.chatbot.create_vectorstore(all_documents):
-                        if st.session_state.chatbot.setup_conversation_chain():
-                            st.session_state.vectorstore_ready = True
-                            st.success("✅ Documents processed and ready for analysis!")
-                        else:
-                            st.error("Failed to setup conversation chain")
-                    else:
-                        st.error("Failed to create vectorstore")
-                else:
-                    st.error("No documents were successfully processed")
-        
-        # Sample questions
-        st.divider()
-        st.header("💡 Sample Questions")
-        sample_questions = [
-            "What are the key financial metrics for this company?",
-            "What are the main risk factors mentioned?",
-            "How did revenue change compared to previous year?",
-            "What is the company's debt-to-equity ratio?",
-            "What are the major business segments?"
-        ]
-        
-        for question in sample_questions:
-            if st.button(question, key=f"sample_{question[:20]}"):
-                if st.session_state.vectorstore_ready:
-                    st.session_state.chat_history.append({"role": "user", "content": question})
+                            st.error("❌ Failed to create knowledge base")
     
-    # Main chat interface
-    col1, col2 = st.columns([2, 1])
+    # Document statistics
+    if st.session_state.documents_processed:
+        st.header("📊 Document Stats")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Documents", len(st.session_state.rag_processor.documents))
+        with col2:
+            st.metric("Images", len(st.session_state.rag_processor.extracted_images))
+        
+        col3, col4 = st.columns(2)
+        with col3:
+            st.metric("Tables", len(st.session_state.rag_processor.extracted_tables))
+
+# Main content area
+if not google_api_key:
+    st.info("👈 Please enter your Google API key in the sidebar to get started.")
+elif not st.session_state.documents_processed:
+    st.info("👈 Please upload and process a financial document to start analyzing.")
+else:
+    # Sample questions for multimodal analysis
+    st.header("💡 Sample Questions")
+    sample_questions = [
+        "What are the key financial metrics shown in the charts and tables?",
+        "Analyze the revenue trends from both text and visual data",
+        "What risks are mentioned in text and shown in risk charts?",
+        "Compare the financial ratios across different data sources",
+        "What insights can you derive from the financial graphs and tables?",
+        "Analyze the company's performance using all available data types"
+    ]
     
-    with col1:
-        st.header("💬 Chat Interface")
-        
-        # Display chat history
-        chat_container = st.container()
-        with chat_container:
-            for message in st.session_state.chat_history:
-                if message["role"] == "user":
-                    with st.chat_message("user"):
-                        st.write(message["content"])
-                else:
-                    with st.chat_message("assistant"):
-                        st.write(message["content"])
-                        if "sources" in message:
-                            with st.expander("📚 Sources"):
-                                for i, source in enumerate(message["sources"]):
-                                    st.write(f"**Source {i+1}:** {source}")
-        
-        # Chat input
-        if st.session_state.vectorstore_ready:
-            user_question = st.chat_input("Ask about the financial documents...")
-            
-            if user_question:
-                # Add user message to history
-                st.session_state.chat_history.append({"role": "user", "content": user_question})
-                
-                # Get response from chatbot
-                with st.spinner("Analyzing documents..."):
-                    response = st.session_state.chatbot.query(user_question)
-                
-                if "error" in response:
-                    st.error(response["error"])
-                else:
-                    # Add assistant response to history
-                    sources = []
-                    if "source_documents" in response:
-                        sources = [doc.page_content[:200] + "..." for doc in response["source_documents"]]
-                    
-                    assistant_message = {
-                        "role": "assistant", 
-                        "content": response["answer"],
-                        "sources": sources
-                    }
-                    st.session_state.chat_history.append(assistant_message)
-                
-                st.rerun()
-        else:
-            st.info("Please configure the API key, initialize embeddings, and upload documents to start chatting.")
+    cols = st.columns(3)  # Changed from len(sample_questions) to 3 for better layout
+    for i, question in enumerate(sample_questions):
+        col_idx = i % 3
+        with cols[col_idx]:
+            if st.button(question, key=f"sample_{i}"):
+                st.session_state.current_question = question
     
-    with col2:
-        st.header("📈 Analysis Tools")
-        
-        if st.session_state.vectorstore_ready:
-            st.success("✅ Ready for financial analysis")
-            
-            # Quick analysis buttons
-            if st.button("📊 Financial Summary"):
-                summary_query = "Provide a comprehensive financial summary including revenue, profit margins, and key financial ratios."
-                st.session_state.chat_history.append({"role": "user", "content": summary_query})
-                st.rerun()
-            
-            if st.button("⚠️ Risk Analysis"):
-                risk_query = "What are the main risk factors and challenges facing this company?"
-                st.session_state.chat_history.append({"role": "user", "content": risk_query})
-                st.rerun()
-            
-            if st.button("📈 Performance Trends"):
-                trend_query = "Analyze the company's performance trends over the reporting periods."
-                st.session_state.chat_history.append({"role": "user", "content": trend_query})
-                st.rerun()
+    # Chat interface
+    st.header("💬 Financial Analysis Chat")
+    
+    # Display chat history
+    for message in st.session_state.chat_history:
+        if message["role"] == "user":
+            st.markdown(f'<div class="chat-message user-message"><strong>You:</strong> {message["content"]}</div>', unsafe_allow_html=True)
         else:
-            st.warning("Complete setup to enable analysis tools")
-        
-        # Clear chat history
-        if st.button("🗑️ Clear Chat History"):
-            st.session_state.chat_history = []
+            st.markdown(f'<div class="chat-message assistant-message"><strong>Assistant:</strong> {message["content"]}</div>', unsafe_allow_html=True)
+    
+    # Query input
+    query = st.text_input(
+        "Ask a question about the financial document:",
+        value=st.session_state.get("current_question", ""),
+        key="query_input"
+    )
+    
+    if st.button("🔍 Analyze", type="primary") and query:
+        with st.spinner("Analyzing document..."):
+            response = st.session_state.rag_processor.query_documents(query)
+            
+            # Add to chat history
+            st.session_state.chat_history.append({"role": "user", "content": query})
+            st.session_state.chat_history.append({"role": "assistant", "content": response})
+            
+            # Clear current question
+            if "current_question" in st.session_state:
+                del st.session_state.current_question
+            
             st.rerun()
-
-if __name__ == "__main__":
-    main()
     
+    # Document preview section with multimodal content
+    with st.expander("📋 Multimodal Document Preview", expanded=False):
+        tab1, tab2, tab3 = st.tabs(["📄 Text Content", "📊 Tables", "🖼️ Images"])
+        
+        with tab1:
+            if st.session_state.rag_processor.documents:
+                text_docs = [doc for doc in st.session_state.rag_processor.documents if doc.metadata.get("type") == "text"]
+                if text_docs:
+                    st.markdown("### Text Content Sample")
+                    st.markdown(f'<div class="document-preview">{text_docs[0].page_content[:1000]}...</div>', unsafe_allow_html=True)
+                else:
+                    st.info("No text content found")
+        
+        with tab2:
+            if st.session_state.rag_processor.extracted_tables:
+                st.markdown("### Extracted Financial Tables")
+                for i, table in enumerate(st.session_state.rag_processor.extracted_tables[:3]):
+                    st.markdown(f"**Table {i+1}:**")
+                    st.text(table["content"][:500] + "..." if len(table["content"]) > 500 else table["content"])
+            else:
+                st.info("No tables found")
+        
+        with tab3:
+            if st.session_state.rag_processor.extracted_images:
+                st.markdown("### Extracted Financial Charts/Images")
+                for i, img_info in enumerate(st.session_state.rag_processor.extracted_images[:5]):
+                    try:
+                        if os.path.exists(img_info["path"]):
+                            st.markdown(f"**Image {i+1}: {img_info['filename']}**")
+                            image = Image.open(img_info["path"])
+                            st.image(image, caption=f"Financial Chart/Graph {i+1}", use_column_width=True)
+                    except Exception as e:
+                        st.error(f"Could not display image {i+1}: {str(e)}")
+            else:
+                st.info("No images found")
+    
+    # Clear chat history
+    if st.button("🗑️ Clear Chat History"):
+        st.session_state.chat_history = []
+        if st.session_state.rag_processor.memory:
+            st.session_state.rag_processor.memory.clear()
+        st.rerun()
+
+# Footer
+st.markdown("---")
+st.markdown(
+    """
+    <div style='text-align: center; color: #666;'>
+        <p>Multimodal Financial RAG Analyst - Powered by Gemini 2.0 Flash & LangChain</p>
+        <p>Advanced analysis of text, tables, charts, and images in financial documents</p>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
