@@ -36,7 +36,7 @@ python-magic-bin>=0.4.14; sys_platform == "win32"
 
 # OCR capabilities (optional but recommended for better PDF processing)
 pytesseract>=0.3.10
-opencv-python>=4.8.0
+opencv-python-headless>=4.8.0
 
 # Additional LangChain dependencies
 tiktoken>=0.5.0
