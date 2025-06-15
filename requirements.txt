@@ -1,44 +1,44 @@
 # Core Framework
-streamlit>=1.28.0
+streamlit
 
 # LangChain Ecosystem
-langchain>=0.1.0
-langchain-community>=0.0.20
-langchain-google-genai>=1.0.0
+langchain
+langchain-community
+langchain-google-genai
 
 # Google AI
-google-generativeai>=0.3.0
+google-generativeai
 
 # Vector Store and Embeddings
-faiss-cpu>=1.7.4
-sentence-transformers>=2.2.2
+faiss-cpu
+sentence-transformers
 
 # Document Processing
-unstructured[pdf]>=0.10.30
-python-magic-bin>=0.4.14  # For Windows compatibility
-pikepdf>=8.0.0
+unstructured[pdf]
+python-magic-bin
+pikepdf
 
 # Image Processing
-Pillow>=9.5.0
-opencv-python>=4.8.0.76
+Pillow
+opencv-python
 
 # Data Processing
-pandas>=1.5.3
-numpy>=1.24.3
+pandas
+numpy
 
 # Additional Dependencies for PDF Processing
-pdfplumber>=0.9.0
-PyPDF2>=3.0.1
-pdf2image>=1.16.3
-poppler-utils>=0.1.0  # Note: Requires system installation
+pdfplumber0
+PyPDF2
+pdf2image
+poppler-utils  # Note: Requires system installation
 
 # System Dependencies
-python-dotenv>=1.0.0
-typing-extensions>=4.5.0
+python-dotenv
+typing-extensions
 
 # Optional: For better performance
-torch>=2.0.0  # For sentence-transformers
-transformers>=4.30.0
+torch # For sentence-transformers
+transformers
 
 # Development/Testing (optional)
 pytest>=7.4.0
