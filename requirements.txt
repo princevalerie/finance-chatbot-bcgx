@@ -1,64 +1,10 @@
-# Core Streamlit and Web Framework
 streamlit>=1.28.0
-
-# Data Processing and Analysis
-pandas>=2.0.0
-numpy>=1.24.0
-
-# Image Processing
-Pillow>=10.0.0
-
-# LangChain Core and Community
+PyPDF2>=3.0.1
 langchain>=0.1.0
-langchain-community>=0.0.20
 langchain-google-genai>=1.0.0
-
-# Vector Database
+langchain-community>=0.0.10
 faiss-cpu>=1.7.4
-
-# Embeddings
-sentence-transformers>=2.2.2
-
-# Google AI
 google-generativeai>=0.3.0
-
-# Document Processing - Unstructured
-unstructured>=0.10.30
-unstructured[pdf]>=0.10.30
-
-# PDF Processing Dependencies
-pypdf>=3.15.0
-pdfplumber>=0.9.0
-
-# Additional dependencies for unstructured PDF processing
-python-magic>=0.4.27
-python-magic-bin>=0.4.14; sys_platform == "win32"
-
-# OCR capabilities (optional but recommended for better PDF processing)
-pytesseract>=0.3.10
-opencv-python-headless>=4.8.0
-
-# Additional LangChain dependencies
-tiktoken>=0.5.0
-
-# HTTP requests (for API calls)
-requests>=2.31.0
-
-# Environment variables (optional but recommended)
-python-dotenv>=1.0.0
-
-# Typing extensions for better type hints
-typing-extensions>=4.8.0
-
-# Base64 encoding (usually included in Python standard library)
-# but some systems might need explicit installation
-# base64 - included in Python standard library
-
-# Temporary file handling (standard library)
-# tempfile - included in Python standard library
-
-# OS operations (standard library)
-# os - included in Python standard library
-
-# Input/Output operations (standard library)
-# io - included in Python standard library
+pandas>=1.5.0
+unstructured>=0.10.0
+unstructured[pdf]>=0.10.0
