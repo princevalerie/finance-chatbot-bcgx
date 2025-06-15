@@ -7,17 +7,16 @@ import pandas as pd
 from PIL import Image
 import io
 
-# LangChain imports
+# LangChain imports - Updated to use new packages
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceEmbeddings
+try:
+    from langchain_huggingface import HuggingFaceEmbeddings
+except ImportError:
+    from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.memory import ConversationBufferMemory
 from langchain.schema import Document
 from langchain.prompts import PromptTemplate
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain.chains.retrieval import create_retrieval_chain
-from langchain.chains.history_aware_retriever import create_history_aware_retriever
 
 # Unstructured imports
 from unstructured.partition.pdf import partition_pdf
@@ -70,8 +69,26 @@ st.markdown("""
         border-radius: 0.5rem;
         background-color: #fafafa;
     }
+    .processing-status {
+        background-color: #e8f5e8;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border-left: 4px solid #4caf50;
+        margin: 1rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
+
+@st.cache_resource
+def initialize_embeddings():
+    """Initialize embeddings with caching"""
+    try:
+        return HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2"
+        )
+    except Exception as e:
+        st.error(f"Error initializing embeddings: {str(e)}")
+        return None
 
 class FinancialRAGProcessor:
     def __init__(self):
@@ -79,13 +96,17 @@ class FinancialRAGProcessor:
         self.vectorstore = None
         self.retriever = None
         self.llm = None
-        self.memory = None
         self.documents = []
         self.extracted_tables = []
         self.extracted_images = []
+        self.chat_history = []
+        self.is_initialized = False
         
     def initialize_models(self, google_api_key: str):
         """Initialize the LLM and embeddings"""
+        if self.is_initialized:
+            return True
+            
         try:
             # Configure Google AI
             genai.configure(api_key=google_api_key)
@@ -99,16 +120,14 @@ class FinancialRAGProcessor:
             )
             
             # Initialize embeddings
-            self.embeddings = HuggingFaceEmbeddings(
-                model_name="sentence-transformers/all-MiniLM-L6-v2"
-            )
+            self.embeddings = initialize_embeddings()
+            if not self.embeddings:
+                return False
             
-            # Initialize memory
-            self.memory = ConversationBufferMemory(
-                memory_key="chat_history",
-                return_messages=True
-            )
+            # Initialize chat history
+            self.chat_history = []
             
+            self.is_initialized = True
             return True
         except Exception as e:
             st.error(f"Error initializing models: {str(e)}")
@@ -131,9 +150,9 @@ class FinancialRAGProcessor:
                 extract_images_in_pdf=True,
                 infer_table_structure=True,
                 chunking_strategy="by_title",
-                max_characters=4000,
-                new_after_n_chars=3800,
-                combine_text_under_n_chars=2000,
+                max_characters=2000,  # Reduced for faster processing
+                new_after_n_chars=1800,
+                combine_text_under_n_chars=1000,
                 image_output_dir_path=image_output_dir
             )
             
@@ -250,10 +269,10 @@ class FinancialRAGProcessor:
                 st.error("No documents to process")
                 return False
             
-            # Split documents
+            # Split documents with smaller chunks for faster processing
             text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=1000,
-                chunk_overlap=200,
+                chunk_size=500,  # Reduced for faster processing
+                chunk_overlap=100,
                 length_function=len
             )
             
@@ -263,7 +282,7 @@ class FinancialRAGProcessor:
             self.vectorstore = FAISS.from_documents(split_docs, self.embeddings)
             self.retriever = self.vectorstore.as_retriever(
                 search_type="similarity",
-                search_kwargs={"k": 5}
+                search_kwargs={"k": 3}  # Reduced for faster processing
             )
             
             return True
@@ -276,7 +295,6 @@ class FinancialRAGProcessor:
         """Get the multimodal financial analysis prompt template"""
         return PromptTemplate(
             template="""You are an advanced multimodal financial analyst assistant specialized in analyzing SEC 10-K reports, financial documents, charts, graphs, and tabular data. 
-            You can process and analyze text, images (charts/graphs), and structured table data to provide comprehensive financial insights.
             
             Use the following context to answer questions about financial data, company performance, risks, market analysis, visual trends, and numerical patterns.
             
@@ -384,11 +402,9 @@ class FinancialRAGProcessor:
             prompt = self.get_financial_prompt()
             
             # Get chat history
-            chat_history = self.memory.chat_memory.messages
             chat_history_str = ""
-            for msg in chat_history[-6:]:  # Last 6 messages for context
-                if hasattr(msg, 'content'):
-                    chat_history_str += f"{msg.__class__.__name__}: {msg.content}\n"
+            for msg in self.chat_history[-6:]:  # Last 6 messages for context
+                chat_history_str += f"{msg['role']}: {msg['content']}\n"
             
             # Generate response using the multimodal context
             response = self.llm.invoke(
@@ -399,8 +415,9 @@ class FinancialRAGProcessor:
                 )
             )
             
-            # Save to memory
-            self.memory.save_context({"input": question}, {"output": response.content})
+            # Save to chat history
+            self.chat_history.append({"role": "user", "content": question})
+            self.chat_history.append({"role": "assistant", "content": response.content})
             
             return response.content
             
@@ -412,11 +429,11 @@ class FinancialRAGProcessor:
 if "rag_processor" not in st.session_state:
     st.session_state.rag_processor = FinancialRAGProcessor()
 
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-
 if "documents_processed" not in st.session_state:
     st.session_state.documents_processed = False
+
+if "processing_status" not in st.session_state:
+    st.session_state.processing_status = None
 
 # Main UI
 st.markdown('<h1 class="main-header">📊 Financial RAG Analyst</h1>', unsafe_allow_html=True)
@@ -432,15 +449,6 @@ with st.sidebar:
         help="Enter your Google AI API key"
     )
     
-    if google_api_key:
-        if st.session_state.rag_processor.llm is None:
-            with st.spinner("Initializing models..."):
-                success = st.session_state.rag_processor.initialize_models(google_api_key)
-                if success:
-                    st.success("✅ Models initialized!")
-                else:
-                    st.error("❌ Failed to initialize models")
-    
     st.header("📄 Document Upload")
     uploaded_file = st.file_uploader(
         "Upload Financial Document (PDF)",
@@ -448,27 +456,52 @@ with st.sidebar:
         help="Upload SEC 10-K reports or other financial documents"
     )
     
-    if uploaded_file and google_api_key:
-        if st.button("🚀 Process Document", type="primary"):
-            with st.spinner("Extracting content from PDF..."):
-                # Extract content
+    # Auto-process when file is uploaded
+    if uploaded_file and google_api_key and not st.session_state.documents_processed:
+        # Initialize models automatically
+        if not st.session_state.rag_processor.is_initialized:
+            with st.spinner("🔄 Initializing AI models..."):
+                success = st.session_state.rag_processor.initialize_models(google_api_key)
+                if success:
+                    st.success("✅ Models initialized!")
+                else:
+                    st.error("❌ Failed to initialize models")
+                    st.stop()
+        
+        # Process document automatically
+        if st.session_state.rag_processor.is_initialized:
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            try:
+                # Step 1: Extract content
+                status_text.text("📄 Extracting content from PDF...")
+                progress_bar.progress(20)
                 extracted_content = st.session_state.rag_processor.extract_pdf_content(uploaded_file)
                 
                 if extracted_content:
-                    st.success(f"✅ Extracted {extracted_content['total_elements']} elements")
+                    status_text.text(f"✅ Extracted {extracted_content['total_elements']} elements")
+                    progress_bar.progress(50)
                     
-                    # Process documents
-                    with st.spinner("Processing documents..."):
-                        doc_count = st.session_state.rag_processor.process_documents(extracted_content)
-                        st.success(f"✅ Processed {doc_count} document chunks")
+                    # Step 2: Process documents
+                    status_text.text("🔄 Processing documents...")
+                    doc_count = st.session_state.rag_processor.process_documents(extracted_content)
+                    progress_bar.progress(75)
                     
-                    # Create vectorstore
-                    with st.spinner("Creating knowledge base..."):
-                        if st.session_state.rag_processor.create_vectorstore():
-                            st.success("✅ Knowledge base created!")
-                            st.session_state.documents_processed = True
-                        else:
-                            st.error("❌ Failed to create knowledge base")
+                    # Step 3: Create vectorstore
+                    status_text.text("🧠 Creating knowledge base...")
+                    if st.session_state.rag_processor.create_vectorstore():
+                        progress_bar.progress(100)
+                        status_text.text("✅ Ready for analysis!")
+                        st.session_state.documents_processed = True
+                        st.session_state.processing_status = f"Processed {doc_count} document chunks successfully!"
+                        st.rerun()
+                    else:
+                        st.error("❌ Failed to create knowledge base")
+                else:
+                    st.error("❌ Failed to extract content from PDF")
+            except Exception as e:
+                st.error(f"❌ Error processing document: {str(e)}")
     
     # Document statistics
     if st.session_state.documents_processed:
@@ -482,13 +515,21 @@ with st.sidebar:
         col3, col4 = st.columns(2)
         with col3:
             st.metric("Tables", len(st.session_state.rag_processor.extracted_tables))
+        with col4:
+            st.metric("Chat History", len(st.session_state.rag_processor.chat_history))
 
 # Main content area
 if not google_api_key:
     st.info("👈 Please enter your Google API key in the sidebar to get started.")
+elif not uploaded_file:
+    st.info("👈 Please upload a financial document (PDF) to start analyzing.")
 elif not st.session_state.documents_processed:
-    st.info("👈 Please upload and process a financial document to start analyzing.")
+    st.info("🔄 Processing your document... Please wait.")
 else:
+    # Show processing status
+    if st.session_state.processing_status:
+        st.markdown(f'<div class="processing-status">🎉 {st.session_state.processing_status}</div>', unsafe_allow_html=True)
+    
     # Sample questions for multimodal analysis
     st.header("💡 Sample Questions")
     sample_questions = [
@@ -500,7 +541,7 @@ else:
         "Analyze the company's performance using all available data types"
     ]
     
-    cols = st.columns(3)  # Changed from len(sample_questions) to 3 for better layout
+    cols = st.columns(3)
     for i, question in enumerate(sample_questions):
         col_idx = i % 3
         with cols[col_idx]:
@@ -511,7 +552,7 @@ else:
     st.header("💬 Financial Analysis Chat")
     
     # Display chat history
-    for message in st.session_state.chat_history:
+    for message in st.session_state.rag_processor.chat_history:
         if message["role"] == "user":
             st.markdown(f'<div class="chat-message user-message"><strong>You:</strong> {message["content"]}</div>', unsafe_allow_html=True)
         else:
@@ -525,12 +566,8 @@ else:
     )
     
     if st.button("🔍 Analyze", type="primary") and query:
-        with st.spinner("Analyzing document..."):
+        with st.spinner("🔍 Analyzing document..."):
             response = st.session_state.rag_processor.query_documents(query)
-            
-            # Add to chat history
-            st.session_state.chat_history.append({"role": "user", "content": query})
-            st.session_state.chat_history.append({"role": "assistant", "content": response})
             
             # Clear current question
             if "current_question" in st.session_state:
@@ -576,9 +613,7 @@ else:
     
     # Clear chat history
     if st.button("🗑️ Clear Chat History"):
-        st.session_state.chat_history = []
-        if st.session_state.rag_processor.memory:
-            st.session_state.rag_processor.memory.clear()
+        st.session_state.rag_processor.chat_history = []
         st.rerun()
 
 # Footer
