@@ -241,7 +241,7 @@ class FinancialRAGProcessor:
             
             # OPTIMIZED: Much smaller chunks for speed
             text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=300,  # Very small for speed
+                chunk_size=1000,  # Very small for speed
                 chunk_overlap=50,
                 length_function=len
             )
