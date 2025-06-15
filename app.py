@@ -107,51 +107,125 @@ class LightweightFinancialRAG:
             return False
     
     def extract_pdf_text_fast(self, pdf_file):
-        """Extract all PDF text without limitations"""
+        """Extract all PDF text using multiple methods for better table handling"""
         try:
-            pdf_reader = PdfReader(pdf_file)
-            text = ""
-            
-            for page in pdf_reader.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    text += page_text + "\n"
+            # Method 1: Try UnstructuredPDFLoader for better table handling
+            try:
+                # Save uploaded file temporarily
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+                    tmp_file.write(pdf_file.getvalue())
+                    tmp_file_path = tmp_file.name
+                
+                # Use UnstructuredPDFLoader
+                loader = UnstructuredPDFLoader(tmp_file_path)
+                documents = loader.load()
+                
+                # Combine all document content
+                text = ""
+                for doc in documents:
+                    if doc.page_content:
+                        text += doc.page_content + "\n"
+                
+                # Clean up temp file
+                os.unlink(tmp_file_path)
+                
+                if text and len(text.strip()) > 100:
+                    return text
                     
-            return text
+            except Exception as e:
+                st.warning(f"UnstructuredPDFLoader failed, trying PyPDF2: {str(e)}")
+            
+            # Method 2: Fallback to PyPDF2 with better error handling
+            try:
+                pdf_reader = PdfReader(pdf_file)
+                text = ""
+                
+                for page_num, page in enumerate(pdf_reader.pages):
+                    try:
+                        page_text = page.extract_text()
+                        if page_text and page_text.strip():
+                            text += f"\n--- Page {page_num + 1} ---\n"
+                            text += page_text + "\n"
+                    except Exception as page_error:
+                        st.warning(f"Error reading page {page_num + 1}: {str(page_error)}")
+                        continue
+                
+                return text
+                
+            except Exception as e:
+                st.error(f"PyPDF2 extraction failed: {str(e)}")
+                return ""
+                
         except Exception as e:
-            st.error(f"PDF extraction failed: {str(e)}")
+            st.error(f"PDF extraction completely failed: {str(e)}")
             return ""
     
     def process_and_store_fast(self, pdf_file):
-        """Lightning-fast processing and storage"""
+        """Enhanced processing with better error handling and validation"""
         try:
-            # Extract text
+            # Extract text with progress indication
+            st.info("📄 Extracting text from PDF...")
             raw_text = self.extract_pdf_text_fast(pdf_file)
             
-            if not raw_text or len(raw_text) < 100:
+            if not raw_text:
+                st.error("❌ No text could be extracted from PDF")
+                return False
+                
+            if len(raw_text.strip()) < 50:
+                st.error("❌ PDF contains insufficient text content")
                 return False
             
-            # Create small, efficient chunks
+            st.info(f"✅ Extracted {len(raw_text)} characters from PDF")
+            
+            # Create chunks with better handling
+            st.info("🔄 Creating text chunks...")
             text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=800,
-                chunk_overlap=50,
-                length_function=len
+                chunk_size=1000,
+                chunk_overlap=100,
+                length_function=len,
+                separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""]
             )
             
-            # Split and limit chunks for speed
+            # Split text into chunks
             chunks = text_splitter.split_text(raw_text)
-            limited_chunks = chunks[:30]  # Max 30 chunks for speed
             
-            # Create vectorstore
-            self.vectorstore = FAISS.from_texts(
-                limited_chunks, 
-                self.embeddings
-            )
+            if not chunks:
+                st.error("❌ Could not create text chunks")
+                return False
             
-            return True
+            # Filter out very short chunks
+            valid_chunks = [chunk for chunk in chunks if len(chunk.strip()) > 20]
+            
+            if not valid_chunks:
+                st.error("❌ No valid text chunks created")
+                return False
+            
+            # Limit chunks for efficiency but keep more for better coverage
+            limited_chunks = valid_chunks[:100]  # Increased from 30 to 100
+            
+            st.info(f"📊 Processing {len(limited_chunks)} text chunks...")
+            
+            # Create vectorstore with retry mechanism
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    self.vectorstore = FAISS.from_texts(
+                        limited_chunks, 
+                        self.embeddings
+                    )
+                    st.success(f"✅ Successfully created knowledge base with {len(limited_chunks)} chunks!")
+                    return True
+                    
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        st.warning(f"Attempt {attempt + 1} failed, retrying... ({str(e)})")
+                        continue
+                    else:
+                        st.error(f"❌ Failed to create vectorstore after {max_retries} attempts: {str(e)}")
+                        return False
             
         except Exception as e:
-            st.error(f"Processing failed: {str(e)}")
+            st.error(f"❌ Processing failed: {str(e)}")
             return False
     
     def query_financial_data(self, question):
