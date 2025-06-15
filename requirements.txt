@@ -1,49 +1,46 @@
-# Web Framework
-streamlit
+# Core Framework
+streamlit>=1.28.0
 
-# LangChain dan Komponennya
-langchain
-langchain-core
-langchain-community
-langchain-google-genai
-
-# Vector Store dan Embeddings
-faiss-cpu
-sentence-transformers
-huggingface-hub
+# LangChain Ecosystem
+langchain>=0.1.0
+langchain-community>=0.0.20
+langchain-google-genai>=1.0.0
 
 # Google AI
-google-generativeai
+google-generativeai>=0.3.0
 
-# PDF Processing
-weasyprint
+# Vector Store and Embeddings
+faiss-cpu>=1.7.4
+sentence-transformers>=2.2.2
+
+# Document Processing
 unstructured[pdf]>=0.10.30
-unstructured-inference>=0.7.23
-pypdf
-pdfplumber
-opencv-python-headless
+python-magic-bin>=0.4.14  # For Windows compatibility
+pikepdf>=8.0.0
 
-pi-heif
+# Image Processing
+Pillow>=9.5.0
+opencv-python>=4.8.0.76
 
-# Machine Learning & Data Processing
-torch
-transformers
-numpy
-pandas
+# Data Processing
+pandas>=1.5.3
+numpy>=1.24.3
 
-# Utilitas
-python-dotenv
-requests
-tiktoken
-accelerate
-safetensors
-protobuf
-typing-extensions
-pydantic
-nest-asyncio
-openai
-google
-contourpy
-cycler
-arabic-reshaper
-asyncio
+# Additional Dependencies for PDF Processing
+pdfplumber>=0.9.0
+PyPDF2>=3.0.1
+pdf2image>=1.16.3
+poppler-utils>=0.1.0  # Note: Requires system installation
+
+# System Dependencies
+python-dotenv>=1.0.0
+typing-extensions>=4.5.0
+
+# Optional: For better performance
+torch>=2.0.0  # For sentence-transformers
+transformers>=4.30.0
+
+# Development/Testing (optional)
+pytest>=7.4.0
+black>=23.3.0
+flake8>=6.0.0
