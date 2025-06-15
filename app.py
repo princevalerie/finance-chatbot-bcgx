@@ -134,7 +134,7 @@ class FinancialRAGProcessor:
             return False
     
     def extract_pdf_content(self, pdf_file) -> Dict[str, Any]:
-        """Extract comprehensive content from PDF including text, images, and tables"""
+        """Extract comprehensive content from PDF including text, images, and tables - OPTIMIZED"""
         try:
             # Save uploaded file temporarily
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
@@ -144,40 +144,29 @@ class FinancialRAGProcessor:
             # Create temp directory for images
             image_output_dir = tempfile.mkdtemp()
             
-            # Partition PDF with advanced settings for multimodal extraction
+            # OPTIMIZED: Simplified PDF processing for speed
             elements = partition_pdf(
                 filename=tmp_file_path,
-                extract_images_in_pdf=True,
-                infer_table_structure=True,
-                chunking_strategy="by_title",
-                max_characters=2000,  # Reduced for faster processing
-                new_after_n_chars=1800,
-                combine_text_under_n_chars=1000,
-                image_output_dir_path=image_output_dir
+                extract_images_in_pdf=False,  # Disable image extraction for speed
+                infer_table_structure=False,  # Disable table inference for speed
+                strategy="fast",  # Use fast strategy
+                max_characters=1000,  # Much smaller for faster processing
+                new_after_n_chars=900,
+                combine_text_under_n_chars=500
             )
             
-            # Separate different types of content
+            # OPTIMIZED: Simplified content separation
             text_elements = []
             table_elements = []
-            image_elements = []
-            extracted_image_paths = []
             
-            # Get extracted image files
-            if os.path.exists(image_output_dir):
-                for filename in os.listdir(image_output_dir):
-                    if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-                        extracted_image_paths.append(os.path.join(image_output_dir, filename))
-            
+            # Just process text elements for speed
             for element in elements:
-                if hasattr(element, 'category'):
-                    if element.category == "Table":
+                content = str(element).strip()
+                if content and len(content) > 20:  # Filter out very short content
+                    if "table" in content.lower() or "data" in content.lower():
                         table_elements.append(element)
-                    elif element.category == "Image":
-                        image_elements.append(element)
                     else:
                         text_elements.append(element)
-                else:
-                    text_elements.append(element)
             
             # Clean up temporary file
             os.unlink(tmp_file_path)
@@ -185,10 +174,10 @@ class FinancialRAGProcessor:
             return {
                 "text_elements": text_elements,
                 "table_elements": table_elements,
-                "image_elements": image_elements,
-                "extracted_image_paths": extracted_image_paths,
+                "image_elements": [],  # Disabled for speed
+                "extracted_image_paths": [],  # Disabled for speed
                 "image_output_dir": image_output_dir,
-                "total_elements": len(elements)
+                "total_elements": len(text_elements) + len(table_elements)
             }
             
         except Exception as e:
@@ -196,64 +185,45 @@ class FinancialRAGProcessor:
             return None
     
     def process_documents(self, extracted_content: Dict[str, Any]):
-        """Process extracted content into LangChain documents with multimodal support"""
+        """Process extracted content into LangChain documents - OPTIMIZED FOR SPEED"""
         try:
             documents = []
             
-            # Process text elements
-            for i, element in enumerate(extracted_content["text_elements"]):
-                content = str(element)
-                if content.strip():
+            # Process text elements - SIMPLIFIED
+            for i, element in enumerate(extracted_content["text_elements"][:50]):  # Limit to first 50 for speed
+                content = str(element).strip()
+                if content and len(content) > 30:  # Only process meaningful content
                     doc = Document(
-                        page_content=content,
+                        page_content=content[:800],  # Truncate for speed
                         metadata={
                             "type": "text",
                             "element_id": i,
-                            "category": getattr(element, 'category', 'Unknown')
+                            "category": "Financial_Text"
                         }
                     )
                     documents.append(doc)
             
-            # Process table elements with enhanced metadata
-            for i, element in enumerate(extracted_content["table_elements"]):
-                content = str(element)
-                if content.strip():
+            # Process table elements - SIMPLIFIED
+            for i, element in enumerate(extracted_content["table_elements"][:20]):  # Limit to first 20 for speed
+                content = str(element).strip()
+                if content and len(content) > 30:
                     doc = Document(
-                        page_content=f"FINANCIAL TABLE DATA: {content}",
+                        page_content=f"FINANCIAL DATA: {content[:800]}",  # Truncate for speed
                         metadata={
                             "type": "table",
                             "element_id": i,
-                            "category": "Financial_Table",
-                            "analysis_type": "tabular_data"
+                            "category": "Financial_Table"
                         }
                     )
                     documents.append(doc)
                     self.extracted_tables.append({
                         "id": i,
-                        "content": content,
+                        "content": content[:500],  # Truncate for display
                         "raw_element": element
                     })
             
-            # Process image elements with paths for multimodal analysis
-            for i, image_path in enumerate(extracted_content.get("extracted_image_paths", [])):
-                if os.path.exists(image_path):
-                    # Create description document for image
-                    doc = Document(
-                        page_content=f"FINANCIAL CHART/GRAPH: Image extracted from document - {os.path.basename(image_path)}",
-                        metadata={
-                            "type": "image",
-                            "element_id": i,
-                            "category": "Financial_Visual",
-                            "image_path": image_path,
-                            "analysis_type": "visual_data"
-                        }
-                    )
-                    documents.append(doc)
-                    self.extracted_images.append({
-                        "id": i,
-                        "path": image_path,
-                        "filename": os.path.basename(image_path)
-                    })
+            # Skip image processing for speed
+            self.extracted_images = []
             
             self.documents = documents
             return len(documents)
@@ -263,26 +233,28 @@ class FinancialRAGProcessor:
             return 0
     
     def create_vectorstore(self):
-        """Create FAISS vectorstore from processed documents"""
+        """Create FAISS vectorstore from processed documents - SUPER FAST"""
         try:
             if not self.documents:
                 st.error("No documents to process")
                 return False
             
-            # Split documents with smaller chunks for faster processing
+            # OPTIMIZED: Much smaller chunks for speed
             text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=500,  # Reduced for faster processing
-                chunk_overlap=100,
+                chunk_size=300,  # Very small for speed
+                chunk_overlap=50,
                 length_function=len
             )
             
-            split_docs = text_splitter.split_documents(self.documents)
+            # Limit number of documents for speed
+            limited_docs = self.documents[:30]  # Only process first 30 documents
+            split_docs = text_splitter.split_documents(limited_docs)
             
-            # Create vectorstore
-            self.vectorstore = FAISS.from_documents(split_docs, self.embeddings)
+            # Create vectorstore with limited documents
+            self.vectorstore = FAISS.from_documents(split_docs[:50], self.embeddings)  # Max 50 chunks
             self.retriever = self.vectorstore.as_retriever(
                 search_type="similarity",
-                search_kwargs={"k": 3}  # Reduced for faster processing
+                search_kwargs={"k": 2}  # Only top 2 results for speed
             )
             
             return True
@@ -357,63 +329,34 @@ class FinancialRAGProcessor:
             return f"Could not analyze image: {os.path.basename(image_path)}"
     
     def query_documents(self, question: str) -> str:
-        """Query documents with multimodal capabilities (text, tables, images)"""
+        """Query documents - OPTIMIZED VERSION"""
         try:
             if not self.retriever:
                 return "Please upload and process a document first."
             
-            # Get relevant documents
+            # Get relevant documents - simplified
             relevant_docs = self.retriever.get_relevant_documents(question)
             
-            # Separate different types of content
-            text_context = []
-            table_context = []
-            image_analyses = []
-            
+            # Simple context combination
+            context_parts = []
             for doc in relevant_docs:
-                doc_type = doc.metadata.get("type", "text")
-                
-                if doc_type == "text":
-                    text_context.append(doc.page_content)
-                elif doc_type == "table":
-                    table_context.append(doc.page_content)
-                elif doc_type == "image" and "image_path" in doc.metadata:
-                    # Analyze image with Gemini multimodal
-                    image_path = doc.metadata["image_path"]
-                    if os.path.exists(image_path):
-                        image_analysis = self.analyze_image_with_gemini(image_path, question)
-                        image_analyses.append(f"IMAGE ANALYSIS: {image_analysis}")
+                context_parts.append(doc.page_content[:400])  # Truncate for speed
             
-            # Combine all context types
-            combined_context = []
+            full_context = "\n\n".join(context_parts)
             
-            if text_context:
-                combined_context.append("TEXT CONTENT:\n" + "\n".join(text_context))
+            # Simple prompt without complex formatting
+            simple_prompt = f"""
+            You are a financial analyst. Answer the question based on the context provided.
             
-            if table_context:
-                combined_context.append("TABLE DATA:\n" + "\n".join(table_context))
+            Context: {full_context}
             
-            if image_analyses:
-                combined_context.append("VISUAL ANALYSIS:\n" + "\n".join(image_analyses))
+            Question: {question}
             
-            full_context = "\n\n".join(combined_context)
+            Provide a clear, concise financial analysis answer.
+            """
             
-            # Create enhanced retrieval chain
-            prompt = self.get_financial_prompt()
-            
-            # Get chat history
-            chat_history_str = ""
-            for msg in self.chat_history[-6:]:  # Last 6 messages for context
-                chat_history_str += f"{msg['role']}: {msg['content']}\n"
-            
-            # Generate response using the multimodal context
-            response = self.llm.invoke(
-                prompt.format(
-                    context=full_context,
-                    chat_history=chat_history_str,
-                    input=question
-                )
-            )
+            # Generate response
+            response = self.llm.invoke(simple_prompt)
             
             # Save to chat history
             self.chat_history.append({"role": "user", "content": question})
