@@ -5,18 +5,12 @@ import os
 import tempfile
 from datetime import datetime
 import traceback
-import logging
 
 # LangChain imports - minimal and efficient
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_community.vectorstores import FAISS
 from langchain.prompts import PromptTemplate
-from langchain.schema import Document
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # Configure page
 st.set_page_config(
@@ -97,33 +91,27 @@ class LightweightFinancialRAG:
         self.llm = None
         self.embeddings = None
         self.is_ready = False
-        self.processed_text = None
         
     def initialize_models(self, api_key):
-        """Initialize models with minimal setup"""
+        """Initialize models with better error handling"""
         if self.is_ready:
             return True
             
         try:
-            # Test API key validity first
-            test_llm = ChatGoogleGenerativeAI(
+            # Test the API key first
+            self.llm = ChatGoogleGenerativeAI(
                 model="gemini-1.5-flash",
                 google_api_key=api_key,
                 temperature=0.3
             )
             
-            # Simple test query
-            test_response = test_llm.invoke("Hello")
-            
-            self.llm = test_llm
+            # Quick test
+            test_response = self.llm.invoke("Hello")
             
             self.embeddings = GoogleGenerativeAIEmbeddings(
                 model="models/embedding-001",
                 google_api_key=api_key
             )
-            
-            # Test embeddings
-            test_embedding = self.embeddings.embed_query("test")
             
             self.is_ready = True
             st.success("✅ Models initialized successfully!")
@@ -131,295 +119,182 @@ class LightweightFinancialRAG:
             
         except Exception as e:
             error_msg = str(e)
-            if "API_KEY_INVALID" in error_msg or "invalid API key" in error_msg.lower():
-                st.error("❌ Invalid Google API Key. Please check your API key.")
+            if "API_KEY_INVALID" in error_msg or "invalid" in error_msg.lower():
+                st.error("❌ Invalid Google API Key. Please check your API key from https://ai.google.dev/")
             elif "quota" in error_msg.lower():
-                st.error("❌ API quota exceeded. Please check your Google AI Studio usage.")
+                st.error("❌ API quota exceeded. Check your usage limits.")
             else:
                 st.error(f"❌ Model initialization failed: {error_msg}")
             
-            # Show detailed error in expander
-            with st.expander("🔍 See detailed error"):
-                st.markdown(f'<div class="error-details">{traceback.format_exc()}</div>', 
-                          unsafe_allow_html=True)
+            with st.expander("🔍 See error details"):
+                st.code(traceback.format_exc())
             return False
     
-    def extract_pdf_text_robust(self, pdf_file):
-        """Robust PDF text extraction with multiple fallback methods"""
-        text_content = ""
-        
+    def extract_pdf_text_fast(self, pdf_file):
+        """Enhanced PDF text extraction with better error handling"""
         try:
             # Reset file pointer
             pdf_file.seek(0)
             
-            # Method 1: PyPDF2 (most reliable for text)
-            st.info("📄 Attempting text extraction with PyPDF2...")
+            # Try PyPDF2 first
             try:
+                st.info("📄 Extracting text from PDF...")
                 pdf_reader = PdfReader(pdf_file)
                 
-                # Check if PDF is encrypted
+                # Check if encrypted
                 if pdf_reader.is_encrypted:
-                    st.warning("⚠️ PDF is encrypted, attempting to decrypt...")
+                    st.warning("⚠️ PDF is encrypted, trying to decrypt...")
                     try:
-                        pdf_reader.decrypt("")  # Try empty password
+                        pdf_reader.decrypt("")
                     except:
-                        st.error("❌ Cannot decrypt PDF. Please provide an unencrypted version.")
+                        st.error("❌ Cannot decrypt PDF")
                         return ""
                 
+                text = ""
                 total_pages = len(pdf_reader.pages)
-                st.info(f"📄 Found {total_pages} pages in PDF")
+                st.info(f"📄 Processing {total_pages} pages...")
                 
                 for page_num, page in enumerate(pdf_reader.pages):
                     try:
                         page_text = page.extract_text()
                         if page_text and page_text.strip():
-                            text_content += f"\n=== Page {page_num + 1} ===\n"
-                            text_content += page_text.strip() + "\n"
-                            
-                        # Update progress
-                        if page_num % 5 == 0:
-                            st.info(f"📄 Processed {page_num + 1}/{total_pages} pages...")
-                            
+                            text += f"\n--- Page {page_num + 1} ---\n"
+                            text += page_text + "\n"
                     except Exception as page_error:
-                        st.warning(f"⚠️ Could not read page {page_num + 1}: {str(page_error)}")
+                        st.warning(f"⚠️ Could not read page {page_num + 1}")
                         continue
                 
-                if text_content.strip():
-                    st.success(f"✅ Successfully extracted {len(text_content)} characters using PyPDF2")
-                    return text_content
+                if text.strip():
+                    st.success(f"✅ Extracted {len(text)} characters from PDF")
+                    return text
                 else:
-                    st.warning("⚠️ PyPDF2 extracted no readable text")
+                    st.error("❌ No readable text found in PDF")
+                    return ""
                     
             except Exception as e:
-                st.warning(f"⚠️ PyPDF2 failed: {str(e)}")
-            
-            # Method 2: Try with pdfplumber if available
-            try:
-                import pdfplumber
-                st.info("📄 Trying pdfplumber for better table extraction...")
-                
-                pdf_file.seek(0)
-                with pdfplumber.open(pdf_file) as pdf:
-                    for page_num, page in enumerate(pdf.pages):
-                        try:
-                            page_text = page.extract_text()
-                            if page_text:
-                                text_content += f"\n=== Page {page_num + 1} ===\n"
-                                text_content += page_text + "\n"
-                        except Exception as page_error:
-                            continue
-                
-                if text_content.strip():
-                    st.success(f"✅ Successfully extracted {len(text_content)} characters using pdfplumber")
-                    return text_content
-                    
-            except ImportError:
-                st.info("💡 Install pdfplumber for better PDF processing: pip install pdfplumber")
-            except Exception as e:
-                st.warning(f"⚠️ pdfplumber failed: {str(e)}")
-            
-            # Method 3: Alternative PyPDF2 approach
-            try:
-                st.info("📄 Trying alternative extraction method...")
-                pdf_file.seek(0)
-                
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-                    tmp_file.write(pdf_file.getvalue())
-                    tmp_file_path = tmp_file.name
-                
-                # Try reading with different parameters
-                with open(tmp_file_path, 'rb') as file:
-                    pdf_reader = PdfReader(file)
-                    for page in pdf_reader.pages:
-                        try:
-                            # Try different extraction methods
-                            text = page.extract_text(extraction_mode="layout")
-                            if not text:
-                                text = page.extract_text()
-                            if text:
-                                text_content += text + "\n"
-                        except:
-                            continue
-                
-                # Clean up
-                os.unlink(tmp_file_path)
-                
-                if text_content.strip():
-                    st.success(f"✅ Alternative method extracted {len(text_content)} characters")
-                    return text_content
-                    
-            except Exception as e:
-                st.warning(f"⚠️ Alternative method failed: {str(e)}")
-            
-            # If all methods fail
-            if not text_content.strip():
-                st.error("❌ Could not extract any readable text from PDF")
-                st.info("💡 This might be a scanned PDF. Consider using OCR tools or converting to text first.")
+                st.error(f"❌ PDF reading failed: {str(e)}")
                 return ""
                 
-            return text_content
-            
         except Exception as e:
-            st.error(f"❌ PDF extraction completely failed: {str(e)}")
-            with st.expander("🔍 See detailed error"):
-                st.markdown(f'<div class="error-details">{traceback.format_exc()}</div>', 
-                          unsafe_allow_html=True)
+            st.error(f"❌ PDF extraction failed: {str(e)}")
+            with st.expander("🔍 See error details"):
+                st.code(traceback.format_exc())
             return ""
     
-    def process_and_store_robust(self, pdf_file):
-        """Enhanced processing with comprehensive error handling"""
+    def process_and_store_fast(self, pdf_file):
+        """Enhanced processing with better error handling"""
         try:
-            # Extract text with detailed progress
-            st.info("🔄 Starting PDF processing...")
-            raw_text = self.extract_pdf_text_robust(pdf_file)
+            # Extract text
+            raw_text = self.extract_pdf_text_fast(pdf_file)
             
             if not raw_text or len(raw_text.strip()) < 50:
-                st.error("❌ Insufficient text content extracted from PDF")
+                st.error("❌ Insufficient text content in PDF")
                 return False
             
-            # Store the processed text for debugging
-            self.processed_text = raw_text
-            st.success(f"✅ Text extraction complete: {len(raw_text)} characters")
-            
-            # Create chunks with progress indication
-            st.info("🔄 Creating text chunks for analysis...")
-            
+            # Create chunks
+            st.info("🔄 Creating text chunks...")
             text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=1500,  # Increased chunk size for better context
-                chunk_overlap=200,  # More overlap for continuity
+                chunk_size=1200,
+                chunk_overlap=150,
                 length_function=len,
-                separators=["\n\n", "\n", ". ", "! ", "? ", ", ", " ", ""]
+                separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""]
             )
             
-            # Split text into chunks
             chunks = text_splitter.split_text(raw_text)
             
             if not chunks:
                 st.error("❌ Could not create text chunks")
                 return False
             
-            # Filter and validate chunks
-            valid_chunks = []
-            for chunk in chunks:
-                cleaned_chunk = chunk.strip()
-                if len(cleaned_chunk) > 50:  # Only keep substantial chunks
-                    valid_chunks.append(cleaned_chunk)
+            # Filter valid chunks
+            valid_chunks = [chunk for chunk in chunks if len(chunk.strip()) > 30]
             
             if not valid_chunks:
-                st.error("❌ No valid text chunks created")
+                st.error("❌ No valid chunks created")
                 return False
             
-            # Limit chunks for efficiency while keeping good coverage
-            max_chunks = min(150, len(valid_chunks))  # Increased limit
-            final_chunks = valid_chunks[:max_chunks]
+            # Limit for efficiency
+            final_chunks = valid_chunks[:80]
+            st.info(f"📊 Processing {len(final_chunks)} chunks...")
             
-            st.info(f"📊 Processing {len(final_chunks)} text chunks...")
-            
-            # Create vectorstore with robust error handling
+            # Create vectorstore with retry
             max_retries = 3
             for attempt in range(max_retries):
                 try:
-                    # Create FAISS vectorstore
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    
-                    status_text.text("Creating embeddings...")
-                    progress_bar.progress(30)
+                    progress = st.progress(0)
+                    progress.progress(50)
                     
                     self.vectorstore = FAISS.from_texts(
                         final_chunks, 
-                        self.embeddings,
-                        metadatas=[{"chunk_id": i, "source": "pdf"} for i in range(len(final_chunks))]
+                        self.embeddings
                     )
                     
-                    progress_bar.progress(100)
-                    status_text.text("Vectorstore created successfully!")
-                    
-                    st.success(f"✅ Knowledge base ready with {len(final_chunks)} chunks!")
+                    progress.progress(100)
+                    st.success(f"✅ Knowledge base created with {len(final_chunks)} chunks!")
                     
                     # Test the vectorstore
-                    test_results = self.vectorstore.similarity_search("financial", k=1)
+                    test_results = self.vectorstore.similarity_search("test", k=1)
                     if test_results:
-                        st.info("✅ Vectorstore test successful - ready for queries!")
+                        st.info("✅ System ready for questions!")
                     
                     return True
                     
                 except Exception as e:
-                    error_msg = str(e)
-                    
                     if attempt < max_retries - 1:
-                        st.warning(f"⚠️ Attempt {attempt + 1} failed, retrying... ({error_msg})")
+                        st.warning(f"⚠️ Attempt {attempt + 1} failed, retrying...")
                         continue
                     else:
-                        st.error(f"❌ Failed to create vectorstore after {max_retries} attempts")
+                        st.error(f"❌ Vectorstore creation failed: {str(e)}")
                         
-                        # Provide specific error guidance
-                        if "api" in error_msg.lower() or "quota" in error_msg.lower():
-                            st.error("🚨 API Error: Check your Google API key and quota limits")
-                        elif "memory" in error_msg.lower():
-                            st.error("🚨 Memory Error: Try with a smaller PDF or restart the app")
-                        else:
-                            st.error(f"🚨 Vectorstore Error: {error_msg}")
+                        if "quota" in str(e).lower():
+                            st.error("🚨 API quota exceeded - please check your Google AI usage")
+                        elif "api" in str(e).lower():
+                            st.error("🚨 API error - please verify your API key")
                         
-                        with st.expander("🔍 See detailed error"):
-                            st.markdown(f'<div class="error-details">{traceback.format_exc()}</div>', 
-                                      unsafe_allow_html=True)
+                        with st.expander("🔍 See error details"):
+                            st.code(traceback.format_exc())
                         return False
             
         except Exception as e:
-            st.error(f"❌ Processing failed with unexpected error: {str(e)}")
-            with st.expander("🔍 See detailed error"):
-                st.markdown(f'<div class="error-details">{traceback.format_exc()}</div>', 
-                          unsafe_allow_html=True)
+            st.error(f"❌ Processing failed: {str(e)}")
+            with st.expander("🔍 See error details"):
+                st.code(traceback.format_exc())
             return False
     
     def query_financial_data(self, question):
-        """Enhanced financial analysis query with better context handling"""
+        """Enhanced financial query with better error handling"""
         if not self.vectorstore:
             return "❌ Please upload and process a PDF document first."
         
         try:
-            # Get relevant context with more results for better coverage
-            relevant_docs = self.vectorstore.similarity_search_with_score(question, k=5)
+            # Get relevant context
+            docs = self.vectorstore.similarity_search(question, k=4)
             
-            if not relevant_docs:
-                return "❌ No relevant information found in the document."
+            if not docs:
+                return "❌ No relevant information found for your question."
             
-            # Filter by relevance score and combine context
-            context_parts = []
-            for doc, score in relevant_docs:
-                if score < 0.8:  # Only include highly relevant chunks
-                    context_parts.append(doc.page_content)
+            context = "\n".join([doc.page_content for doc in docs])
             
-            if not context_parts:
-                # Fallback to top results even if scores are high
-                context_parts = [doc.page_content for doc, _ in relevant_docs[:3]]
-            
-            context = "\n\n".join(context_parts)
-            
-            # Enhanced financial analysis prompt
+            # Enhanced prompt
             prompt = f"""
-You are an expert financial analyst. Analyze the provided document context to answer the user's question comprehensively.
+You are a professional financial analyst. Based on the document context provided, answer the user's question with detailed financial analysis.
 
 DOCUMENT CONTEXT:
 {context}
 
-USER QUESTION: {question}
+QUESTION: {question}
 
-Please provide a detailed financial analysis that includes:
+Please provide a comprehensive analysis including:
+- Direct answer to the question
+- Key financial metrics and numbers
+- Trends and patterns
+- Business implications
+- Actionable insights
 
-1. **Direct Answer**: Address the specific question asked
-2. **Key Metrics**: Highlight relevant financial numbers, ratios, and indicators
-3. **Analysis**: Interpret what these metrics mean for financial health
-4. **Trends**: Identify any patterns or changes over time
-5. **Context**: Explain the broader implications
-6. **Recommendations**: Suggest actionable insights where appropriate
-
-Format your response clearly with headers and bullet points where helpful.
+Keep your response clear, structured, and professional.
 
 ANALYSIS:"""
 
-            # Generate response with error handling
             try:
                 response = self.llm.invoke(prompt)
                 return response.content
@@ -427,7 +302,7 @@ ANALYSIS:"""
                 return f"❌ Analysis error: {str(llm_error)}. Please try rephrasing your question."
             
         except Exception as e:
-            return f"❌ Query processing error: {str(e)}"
+            return f"❌ Query error: {str(e)}"
 
 # Initialize session state
 if "rag_system" not in st.session_state:
@@ -439,10 +314,10 @@ if "chat_history" not in st.session_state:
 if "pdf_processed" not in st.session_state:
     st.session_state.pdf_processed = False
 
-if "processing_in_progress" not in st.session_state:
-    st.session_state.processing_in_progress = False
+if "processing" not in st.session_state:
+    st.session_state.processing = False
 
-# Sidebar configuration
+# Sidebar
 with st.sidebar:
     st.markdown("### 🔑 Configuration")
     
@@ -450,127 +325,113 @@ with st.sidebar:
         "Google API Key",
         type="password",
         help="Get your API key from https://ai.google.dev/",
-        placeholder="Enter your Google API key here..."
+        placeholder="Enter your Google API key..."
     )
     
     if api_key:
         st.success("✅ API Key provided")
-    else:
-        st.info("🔑 Please enter your Google API key")
     
     st.markdown("### 📄 Document Upload")
     
     uploaded_file = st.file_uploader(
         "Upload Financial PDF",
         type=['pdf'],
-        help="Upload financial reports, statements, or analysis documents (max 200MB)"
+        help="Upload financial reports, statements, or documents"
     )
     
-    # Manual process button for better control
-    if uploaded_file and api_key and not st.session_state.pdf_processed and not st.session_state.processing_in_progress:
+    # Manual processing button
+    if uploaded_file and api_key and not st.session_state.pdf_processed and not st.session_state.processing:
         if st.button("🚀 Process PDF", type="primary"):
-            st.session_state.processing_in_progress = True
+            st.session_state.processing = True
             st.rerun()
     
     # Processing logic
-    if st.session_state.processing_in_progress and uploaded_file and api_key:
-        # Initialize models first
-        if not st.session_state.rag_system.is_ready:
-            with st.spinner("🔄 Initializing AI models..."):
-                if st.session_state.rag_system.initialize_models(api_key):
-                    st.success("✅ AI models ready!")
+    if st.session_state.processing and uploaded_file and api_key:
+        try:
+            # Initialize models
+            if not st.session_state.rag_system.is_ready:
+                with st.spinner("🔄 Initializing AI models..."):
+                    if not st.session_state.rag_system.initialize_models(api_key):
+                        st.session_state.processing = False
+                        st.stop()
+            
+            # Process PDF
+            with st.spinner("📄 Processing PDF..."):
+                if st.session_state.rag_system.process_and_store_fast(uploaded_file):
+                    st.session_state.pdf_processed = True
+                    st.session_state.processing = False
+                    st.success("🎉 PDF processed successfully!")
+                    st.rerun()
                 else:
-                    st.session_state.processing_in_progress = False
-                    st.stop()
-        
-        # Process PDF
-        with st.spinner("📄 Processing PDF document..."):
-            if st.session_state.rag_system.process_and_store_robust(uploaded_file):
-                st.session_state.pdf_processed = True
-                st.session_state.processing_in_progress = False
-                st.success("🎉 PDF processing complete! You can now ask questions.")
-                st.rerun()
-            else:
-                st.session_state.processing_in_progress = False
-                st.error("❌ PDF processing failed. Please check the errors above.")
+                    st.session_state.processing = False
+                    st.error("❌ PDF processing failed")
+                    
+        except Exception as e:
+            st.session_state.processing = False
+            st.error(f"❌ Unexpected error: {str(e)}")
+            with st.expander("🔍 Error details"):
+                st.code(traceback.format_exc())
     
     # Reset button
-    if st.button("🔄 Reset Everything"):
-        # Clear all session state
+    if st.button("🔄 Reset All"):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
         st.rerun()
     
-    # Debug information
-    if st.session_state.pdf_processed and st.checkbox("🔍 Show Debug Info"):
-        st.markdown("### 📊 Debug Information")
-        if st.session_state.rag_system.processed_text:
-            text_length = len(st.session_state.rag_system.processed_text)
-            st.info(f"Extracted text: {text_length:,} characters")
-            
-            # Show first 500 characters
-            with st.expander("Preview extracted text"):
-                st.text(st.session_state.rag_system.processed_text[:500] + "...")
-    
-    # Status indicator
+    # Status
     st.markdown("### 📊 Status")
-    if st.session_state.processing_in_progress:
-        st.warning("🟡 Processing in progress...")
+    if st.session_state.processing:
+        st.warning("🟡 Processing...")
     elif st.session_state.pdf_processed:
-        st.success("🟢 System Ready for Analysis")
+        st.success("🟢 Ready for Analysis")
     elif api_key and uploaded_file:
-        st.info("🔵 Ready to process - click 'Process PDF' button")
+        st.info("🔵 Ready to Process")
     elif api_key:
-        st.info("📄 Please upload a PDF document")
+        st.info("📄 Upload PDF")
     else:
-        st.warning("🔑 Please enter your API key")
+        st.warning("🔑 Enter API Key")
 
-# Main chat interface
+# Main interface
 st.markdown('<h1 class="main-header">💰 Financial Analyst Assistant</h1>', unsafe_allow_html=True)
 
 # Chat container
-chat_container = st.container()
+if st.session_state.chat_history:
+    for message in st.session_state.chat_history:
+        if message["role"] == "user":
+            st.markdown(
+                f'<div class="chat-message user-message">🧑‍💼 <strong>You:</strong><br>{message["content"]}</div>',
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                f'<div class="chat-message assistant-message">💰 <strong>Analyst:</strong><br>{message["content"]}</div>',
+                unsafe_allow_html=True
+            )
+else:
+    # Welcome message
+    st.markdown("""
+    <div style="text-align: center; padding: 2rem; color: #666;">
+        <h3>Welcome to Financial Analyst Assistant! 💰</h3>
+        <p>Upload a financial PDF and get professional analysis on:</p>
+        <ul style="list-style: none; padding: 0;">
+            <li>📊 Financial metrics and KPIs</li>
+            <li>📈 Revenue and growth analysis</li>
+            <li>⚠️ Risk assessment</li>
+            <li>💡 Investment insights</li>
+            <li>🔍 Performance evaluation</li>
+        </ul>
+        <p><strong>Steps to get started:</strong></p>
+        <ol style="text-align: left; max-width: 400px; margin: 0 auto;">
+            <li>Enter your Google API key</li>
+            <li>Upload a financial PDF</li>
+            <li>Click "Process PDF"</li>
+            <li>Start asking questions!</li>
+        </ol>
+    </div>
+    """, unsafe_allow_html=True)
 
-with chat_container:
-    # Display chat history
-    if st.session_state.chat_history:
-        for message in st.session_state.chat_history:
-            if message["role"] == "user":
-                st.markdown(
-                    f'<div class="chat-message user-message">🧑‍💼 <strong>You:</strong><br>{message["content"]}</div>',
-                    unsafe_allow_html=True
-                )
-            else:
-                st.markdown(
-                    f'<div class="chat-message assistant-message">💰 <strong>Financial Analyst:</strong><br>{message["content"]}</div>',
-                    unsafe_allow_html=True
-                )
-    else:
-        # Welcome message
-        st.markdown("""
-        <div style="text-align: center; padding: 2rem; color: #666;">
-            <h3>Welcome to Financial Analyst Assistant! 💰</h3>
-            <p>Upload a financial PDF and start asking questions about:</p>
-            <ul style="list-style: none; padding: 0;">
-                <li>📊 Financial metrics and ratios</li>
-                <li>📈 Revenue and growth trends</li>
-                <li>⚠️ Risk factors and analysis</li>
-                <li>💡 Investment insights</li>
-                <li>🔍 Comparative analysis</li>
-                <li>💼 Business performance evaluation</li>
-            </ul>
-            <p><strong>To get started:</strong></p>
-            <ol style="list-style: none; padding: 0;">
-                <li>1️⃣ Enter your Google API key in the sidebar</li>
-                <li>2️⃣ Upload a financial PDF document</li>
-                <li>3️⃣ Click 'Process PDF' to analyze the document</li>
-                <li>4️⃣ Start asking questions!</li>
-            </ol>
-        </div>
-        """, unsafe_allow_html=True)
-
-# Chat input at bottom
-if not st.session_state.processing_in_progress:
+# Chat input
+if not st.session_state.processing:
     st.markdown('<div class="chat-input">', unsafe_allow_html=True)
     
     col1, col2 = st.columns([5, 1])
@@ -578,63 +439,54 @@ if not st.session_state.processing_in_progress:
     with col1:
         user_question = st.text_input(
             "Ask about the financial document...",
-            placeholder="e.g., What are the key financial metrics? What are the main risks? How is the revenue trend?",
+            placeholder="What are the key financial metrics? How is performance?",
             key="user_input",
             label_visibility="collapsed",
             disabled=not st.session_state.pdf_processed
         )
     
     with col2:
-        send_button = st.button(
-            "Send 📤", 
-            type="primary",
-            disabled=not st.session_state.pdf_processed
-        )
+        send_button = st.button("Send 📤", type="primary", disabled=not st.session_state.pdf_processed)
     
     st.markdown('</div>', unsafe_allow_html=True)
     
-    # Process user input
-    if (send_button or user_question) and user_question:
-        if not st.session_state.pdf_processed:
-            st.warning("⚠️ Please process a PDF document first!")
-        else:
-            # Add user message
+    # Handle user input
+    if (send_button or user_question) and user_question and st.session_state.pdf_processed:
+        # Add user message
+        st.session_state.chat_history.append({
+            "role": "user",
+            "content": user_question
+        })
+        
+        # Generate response
+        with st.spinner("🤔 Analyzing..."):
+            response = st.session_state.rag_system.query_financial_data(user_question)
+            
+            # Add assistant response
             st.session_state.chat_history.append({
-                "role": "user",
-                "content": user_question
+                "role": "assistant",
+                "content": response
             })
-            
-            # Generate response
-            with st.spinner("🤔 Analyzing your question..."):
-                response = st.session_state.rag_system.query_financial_data(user_question)
-                
-                # Add assistant response
-                st.session_state.chat_history.append({
-                    "role": "assistant",
-                    "content": response
-                })
-            
-            # Clear input and refresh
-            st.rerun()
+        
+        st.rerun()
 
-# Quick action buttons for common queries
-if st.session_state.pdf_processed and not st.session_state.processing_in_progress:
-    st.markdown("### 🚀 Quick Analysis Questions")
+# Quick questions
+if st.session_state.pdf_processed and not st.session_state.processing:
+    st.markdown("### 🚀 Quick Analysis")
     
-    quick_questions = [
-        "What are the key financial highlights and metrics?",
-        "What are the main risk factors mentioned?",
-        "How is the company's financial performance trending?",
-        "What are the revenue and profit trends?",
-        "What are the major expenses and cost drivers?",
-        "What insights can you provide about cash flow?"
+    questions = [
+        "What are the key financial highlights?",
+        "What are the main risks?",
+        "How is the financial performance?",
+        "What are revenue trends?",
+        "What are the major expenses?",
+        "Any investment insights?"
     ]
     
     cols = st.columns(3)
-    for i, question in enumerate(quick_questions):
-        col_idx = i % 3
-        with cols[col_idx]:
-            if st.button(question, key=f"quick_{i}"):
+    for i, question in enumerate(questions):
+        with cols[i % 3]:
+            if st.button(question, key=f"q_{i}"):
                 st.session_state.chat_history.append({
                     "role": "user",
                     "content": question
@@ -654,8 +506,8 @@ st.markdown("---")
 st.markdown(
     """
     <div style='text-align: center; color: #666; font-size: 0.9rem;'>
-        💰 Financial Analyst Assistant - Enhanced with robust error handling<br>
-        Powered by Google Gemini & LangChain | Built with Streamlit
+        💰 Financial Analyst Assistant - Enhanced Error Handling<br>
+        Powered by Google Gemini & LangChain
     </div>
     """,
     unsafe_allow_html=True
